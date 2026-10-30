@@ -92,7 +92,8 @@ export function assetKey(network, asset) {
 
 /**
  * fetch() that pays 402 paywalls through `guard`. Other responses pass through untouched, and so
- * does a 402 to a request that already carries a payment: paying again would pay twice. After a
+ * does a 402 to a request that already carries a payment: paying again would pay twice. One
+ * retry only: a second 402 is returned as it is, never answered with a second signature. After a
  * paid retry, the server's settlement is recorded on the paid entry (`guard.settled`):
  * `receipt.settlement`, and `receipt.txid` when the rail did not have one already.
  *
@@ -107,8 +108,9 @@ export async function payingFetch(guard, url, init = {}, { fetch = globalThis.fe
   if (first.status !== 402 || headers.has('payment-signature') || headers.has('x-payment')) return first;
 
   const required = await readPaymentRequired(first, url);
-  const chosen = pickRequirement(required.accepts, guard.networks, required.x402Version);
-  if (!chosen) throw new Error(cannotPay(url, required, guard.networks));
+  const choice = pickOffer(required, guard);
+  if (!choice) throw new Error(cannotPay(url, required, guard.networks));
+  const { requirement: chosen, network, terms } = choice;
   const offer = toOffer(required, chosen, url);
 
   const receipt = await guard.pay({
@@ -116,17 +118,20 @@ export async function payingFetch(guard, url, init = {}, { fetch = globalThis.fe
     // payee allowlist and the price history are keyed on.
     resource: url,
     host: new URL(url).host,
-    network: networkName(chosen.network),
-    asset: assetKey(chosen.network, chosen.asset),
-    amount: offer.amount,
-    payTo: offer.payTo,
+    network,
+    // A rail that decides for itself (GatewayRail) prices the offer; otherwise the offer says it.
+    asset: terms?.asset ?? assetKey(chosen.network, chosen.asset),
+    amount: terms?.amount ?? offer.amount,
+    payTo: terms?.payTo ?? offer.payTo,
     description: required.x402Version === 2 ? required.resource?.description : chosen.description,
     x402: offer,
+    offer: chosen,
   });
 
   if (required.x402Version === 2) {
-    // `accepted` is the server's requirement verbatim: v2 servers match it field by field.
-    const payment = { x402Version: 2, ...(required.resource && { resource: required.resource }), accepted: chosen, payload: receipt.proof, ...(required.extensions && { extensions: required.extensions }) };
+    // `accepted` is the server's requirement verbatim: v2 servers match it field by field, and
+    // Circle Gateway refuses to settle without `resource`.
+    const payment = { x402Version: 2, resource: required.resource ?? { url }, accepted: chosen, payload: receipt.proof, ...(required.extensions && { extensions: required.extensions }) };
     headers.set('PAYMENT-SIGNATURE', encodePayment(payment));
   } else {
     headers.set('X-PAYMENT', encodePayment({ x402Version: 1, scheme: chosen.scheme, network: chosen.network, payload: receipt.proof }));
@@ -142,6 +147,29 @@ export async function payingFetch(guard, url, init = {}, { fetch = globalThis.fe
   }
   if (settlement && typeof settlement === 'object') guard.settled(receipt, settlement);
   return res;
+}
+
+/**
+ * The first entry of `accepts`, in the server's order, that the guard can pay, and the network of
+ * the rail that would pay it. A rail with `terms` (GatewayRail) decides for itself which x402 v2
+ * offers it takes, and is asked first, so an offer meant for it never reaches a rail that would
+ * sign it some other way. Other rails take what pickRequirement allows on their network.
+ *
+ * @param {PaymentRequired} required
+ * @param {Pick<import('./guard.js').Guard, 'networks'|'rails'>} guard
+ * @returns {{requirement: Requirement, network: string, terms: {asset: string, amount: bigint, payTo: string} | null} | null}
+ */
+export function pickOffer({ accepts, x402Version }, guard) {
+  const deciding = guard.networks.filter((n) => guard.rails.get(n).terms);
+  const plain = guard.networks.filter((n) => !guard.rails.get(n).terms);
+  for (const r of accepts) {
+    for (const network of x402Version === 2 ? deciding : []) {
+      const terms = guard.rails.get(network).terms(r);
+      if (terms) return { requirement: r, network, terms };
+    }
+    if (pickRequirement([r], plain, x402Version)) return { requirement: r, network: networkName(r.network), terms: null };
+  }
+  return null;
 }
 
 /**
@@ -186,7 +214,10 @@ export function pickRequirement(accepts, networks, x402Version = 2) {
 /** @param {Requirement} r  @param {1|2} x402Version */
 function payable(r, x402Version) {
   if (r.scheme !== 'exact' || assetKey(r.network, r.asset) === null) return false;
-  const { assetTransferMethod = 'eip3009', paymentFlow = 'authorization' } = r.extra ?? {};
+  const { assetTransferMethod = 'eip3009', paymentFlow = 'authorization', verifyingContract } = r.extra ?? {};
+  // A domain that names another contract (Circle Gateway's wallet, say) belongs to that contract's
+  // scheme, not the token's own EIP-3009: only a rail that knows the scheme may sign for it.
+  if (verifyingContract && String(verifyingContract).toLowerCase() !== String(r.asset).toLowerCase()) return false;
   return assetTransferMethod === 'eip3009' && paymentFlow === 'authorization' && !(x402Version === 2 && lacksDomain(r));
 }
 
