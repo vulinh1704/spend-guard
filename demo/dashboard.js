@@ -24,6 +24,7 @@ export function createDashboard(guard, { title = 'Spend Guard', account = '', ex
   const answers = new WeakMap();
 
   const view = (entry) => ({
+    id: entry.id,
     at: entry.at,
     status: entry.status,
     usd: formatUsd(entry.usd),
@@ -34,6 +35,8 @@ export function createDashboard(guard, { title = 'Spend Guard', account = '', ex
     error: entry.error ?? null,
     tx: entry.receipt?.txid ?? null,
     txUrl: entry.receipt?.txid && explorer ? explorer(entry.receipt.txid, entry.intent.network) : null,
+    // A signed payment (x402 exact) is settled by the paywall afterwards, and that can fail.
+    unsettled: entry.receipt?.settlement?.success === false ? entry.receipt.settlement.errorReason ?? 'not settled' : null,
     spent: formatUsd(guard.ledger.spentToday(entry.at)),
     spentRatio: Number((guard.ledger.spentToday(entry.at) * 1000n) / usdToMicro(guard.policy.dailyUsd)) / 1000,
   });
@@ -55,6 +58,8 @@ export function createDashboard(guard, { title = 'Spend Guard', account = '', ex
   };
 
   guard.on('entry', (entry) => broadcast(sse(null, view(entry))));
+  // The paywall's settlement arrives after the entry: it brings the transaction of a signed payment.
+  guard.on('settled', (entry) => broadcast(sse('receipt', view(entry))));
   approvals?.on('asked', (ask) => broadcast(sse('ask', askView(ask))));
   approvals?.on('settled', ({ ask, approved, by }) => {
     // When the agent stopped waiting, nobody answered: the entry's own reason says what happened.
@@ -255,11 +260,7 @@ function page({ title, account, daily, perPayment, askAbove, spike }) {
   const text = (tag, cls, value) => { const el = document.createElement(tag); el.className = cls; el.textContent = value; return el; };
   const clock = (ms) => { const s = Math.ceil(ms / 1000); return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0'); };
 
-  function addEntry(e) {
-    feed.querySelector('.empty')?.remove();
-    const li = document.createElement('li');
-    li.className = e.status;
-    li.append(text('span', 'pill', LABEL[e.status] ?? e.status), text('span', 'endpoint', e.endpoint), text('span', 'amount', e.usd));
+  function detailOf(e) {
     const detail = document.createElement('div');
     detail.className = 'detail';
     const answered = e.answer ? ANSWER[e.answer] + ' · ' : '';
@@ -268,10 +269,20 @@ function page({ title, account, daily, perPayment, askAbove, spike }) {
       detail.append(answered + to + (e.tx ? ' · ' : ''));
       if (e.txUrl) { const a = document.createElement('a'); a.href = e.txUrl; a.target = '_blank'; a.rel = 'noopener'; a.textContent = e.tx.slice(0, 10) + '…'; detail.append(a); }
       else if (e.tx) detail.append(e.tx.slice(0, 10) + '…');
+      if (e.unsettled) detail.append(' · signed, but the paywall did not settle it (' + e.unsettled + '); it still counts until it expires');
     } else {
       detail.textContent = answered + (e.error ? [...e.reasons, e.error] : e.reasons).join(' · ');
     }
-    li.append(detail);
+    return detail;
+  }
+
+  function addEntry(e) {
+    feed.querySelector('.empty')?.remove();
+    const li = document.createElement('li');
+    li.className = e.status;
+    li.dataset.id = e.id;
+    li.append(text('span', 'pill', LABEL[e.status] ?? e.status), text('span', 'endpoint', e.endpoint), text('span', 'amount', e.usd));
+    li.append(detailOf(e));
     feed.prepend(li);
     // An unconfirmed payment is neither: it counts in the spend above, as it may have gone out.
     if (e.status === 'paid') counts.paid++; else if (e.status !== 'unconfirmed') counts.stopped++;
@@ -363,6 +374,10 @@ function page({ title, account, daily, perPayment, askAbove, spike }) {
   };
   events.onmessage = (event) => addEntry(JSON.parse(event.data));
   events.addEventListener('ask', (event) => addAsk(JSON.parse(event.data)));
+  events.addEventListener('receipt', (event) => {
+    const e = JSON.parse(event.data);
+    for (const li of feed.children) if (li.dataset.id === e.id) li.querySelector('.detail').replaceWith(detailOf(e));
+  });
   events.addEventListener('settled', (event) => {
     const s = JSON.parse(event.data);
     const ask = asks.get(s.id);
