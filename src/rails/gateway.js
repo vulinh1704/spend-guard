@@ -8,7 +8,7 @@
  * spent, and nothing here signs twice for one request.
  */
 import { BatchEvmScheme, CHAIN_CONFIGS, GATEWAY_AUTH_VALIDITY_WINDOW_SECONDS, GatewayClient } from '@circle-fin/x402-batching/client';
-import { getAddress, isAddressEqual, pad, verifyTypedData } from 'viem';
+import { formatUnits, getAddress, isAddressEqual, pad, verifyTypedData } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
 
 const ARC = CHAIN_CONFIGS.arcTestnet;
@@ -23,6 +23,11 @@ export const GATEWAY_USDC = ARC.tokens.USDC.address;
 const BATCHED = 'GatewayWalletBatched';
 /** Gateway refuses to settle an authorization that expires sooner than this. */
 const MIN_VALIDITY_SECONDS = 7 * 24 * 60 * 60;
+/**
+ * Transfer statuses from the payee's settle on, when Gateway has taken the amount off the balance.
+ * Not 'failed': nothing says the payee can't settle that authorization again.
+ */
+const SETTLED = new Set(['received', 'batched', 'confirmed', 'completed']);
 
 const AUTHORIZATION_TYPES = {
   TransferWithAuthorization: [
@@ -45,12 +50,21 @@ export class GatewayRail {
    * @param {`0x${string}`} options.privateKey  Read from the environment, never committed.
    * @param {string} [options.network]  The name policies use for this rail.
    * @param {Pick<GatewayClient, 'getBalances' | 'deposit' | 'searchTransfers'>} [options.client]  Injected in tests.
+   * @param {() => number} [options.now]  Clock that expires held authorizations; injected in tests.
    */
-  constructor({ privateKey, network = 'arc-testnet-gateway', client }) {
+  constructor({ privateKey, network = 'arc-testnet-gateway', client, now = Date.now }) {
     this.network = network;
     this.account = privateKeyToAccount(privateKey);
     this.client = client ?? new GatewayClient({ chain: 'arcTestnet', privateKey });
     this.scheme = new BatchEvmScheme(this.account);
+    this.now = now;
+    /**
+     * Authorizations signed here that Gateway has not settled yet, by nonce. Gateway lowers the
+     * balance only when the payee settles, so until then these are held back from it. Kept in
+     * memory: it starts empty after a restart.
+     * @type {Map<string, {amount: bigint, validBefore: bigint}>}
+     */
+    this.unsettled = new Map();
   }
 
   get address() {
@@ -87,9 +101,14 @@ export class GatewayRail {
       throw new Error(`the offer from ${intent.resource} differs from the payment the guard approved`);
     }
     // An authorization the balance can't cover fails at settle but stays valid for a week, so a
-    // later deposit would let the payee collect it: don't sign one.
+    // later deposit would let the payee collect it: don't sign one. Holds are looked up before the
+    // balance, so a payment settled in between is counted twice rather than not at all.
+    const held = await this.#held();
     const { gateway } = await this.client.getBalances();
-    if (gateway.available < intent.amount) throw new Error(`Gateway balance ${gateway.formattedAvailable} USDC is too low; deposit more first`);
+    if (gateway.available - held < intent.amount) {
+      const signed = held ? `, ${formatUnits(held, 6)} of it signed for payments not settled yet,` : '';
+      throw new Error(`Gateway balance ${gateway.formattedAvailable} USDC${signed} is too low; deposit more first`);
+    }
 
     const { payload } = await this.scheme.createPaymentPayload(2, {
       ...intent.offer,
@@ -98,7 +117,22 @@ export class GatewayRail {
       // The shortest validity Gateway accepts, however long the paywall asked for.
       maxTimeoutSeconds: GATEWAY_AUTH_VALIDITY_WINDOW_SECONDS,
     });
-    return { network: this.network, txid: payload.authorization.nonce, proof: payload };
+    // The guard pays one at a time, so nothing else was signed between the check and this hold.
+    const { nonce, validBefore } = payload.authorization;
+    this.unsettled.set(nonce, { amount: intent.amount, validBefore: BigInt(validBefore) });
+    return { network: this.network, txid: nonce, proof: payload };
+  }
+
+  /** USDC (atomic units) signed here that a payee can still settle and hasn't yet. */
+  async #held() {
+    const now = BigInt(Math.floor(this.now() / 1000));
+    let held = 0n;
+    await Promise.all([...this.unsettled].map(async ([nonce, { amount, validBefore }]) => {
+      // Expired, nobody can settle it any more; settled, it is already off the balance.
+      if (validBefore <= now || SETTLED.has((await this.status(nonce))?.status)) this.unsettled.delete(nonce);
+      else held += amount;
+    }));
+    return held;
   }
 
   /** Wallet and Gateway balances of the agent, in USDC. */
@@ -108,7 +142,8 @@ export class GatewayRail {
 
   /**
    * Moves USDC from the agent's wallet into its Gateway balance (approve + deposit, two Arc
-   * transactions). Only the Gateway balance can be spent, so it doubles as a hard cap.
+   * transactions). It limits what payees can collect at one time; the guard's budgets are what
+   * limit spending.
    *
    * @param {string} usdc  e.g. "1" or "0.5"
    */

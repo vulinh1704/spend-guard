@@ -60,7 +60,7 @@ node demo/agent.js --gateway --dashboard # nanopayments to an x402 v2 seller tha
 node scripts/gateway-status.js           # Gateway balance, and each payment's batch transaction on Arc
 ```
 
-A Gateway authorization stays valid for at least 7 days, and the payee can settle it at any time until then. So the guard decides before anything is signed, a signature counts as spent, and a paywall that answers 402 again after being paid gets no second signature. Only the Gateway balance can be spent, so a deposit of about one day's budget also works as a hard cap.
+A Gateway authorization stays valid for at least 7 days, and the payee can settle it at any time until then. So the guard decides before anything is signed, a signature counts as spent, and a paywall that answers 402 again after being paid gets no second signature. The guard's budgets are what limit spending. The rail also signs nothing the Gateway balance can't cover, counting what it signed that the payee has not settled yet, so no authorization waits for a later deposit to pay it out. It keeps that count in memory, so it starts from zero after a restart.
 
 `.env` is git-ignored. Testnet tokens have no value. Never point the scripts at mainnet.
 
