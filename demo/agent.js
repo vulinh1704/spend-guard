@@ -5,16 +5,20 @@
  *   node demo/agent.js                 # mock payments, offline
  *   node demo/agent.js --near          # real NEAR testnet transfers (needs .env, see scripts/)
  *   node demo/agent.js --arc           # real USDC transfers on Circle's Arc testnet (needs .env)
+ *   node demo/agent.js --gateway       # Circle Gateway nanopayments on Arc testnet (needs .env and a
+ *                                      # Gateway deposit, see scripts/gateway-deposit.js)
  *   node demo/agent.js --dashboard     # also serves the live page on DASHBOARD_PORT (default 4400),
  *                                      # paces the calls for watching, and stays up until Ctrl+C
  */
 import { existsSync } from 'node:fs';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { createDashboard } from './dashboard.js';
+import { createGatewaySeller } from './gateway-seller.js';
 import { createPaidApi, PAYEES } from './paid-api.js';
 import { Guard, GuardRefused } from '../src/guard.js';
 import { formatUsd } from '../src/money.js';
 import { ArcRail, checkArcPayment } from '../src/rails/arc.js';
+import { GatewayRail, gatewayTransferUrl } from '../src/rails/gateway.js';
 import { MockRail } from '../src/rails/mock.js';
 import { checkNearPayment, NearRail } from '../src/rails/near.js';
 import { payingFetch } from '../src/x402.js';
@@ -49,10 +53,20 @@ function setUp(mode) {
       explorer: (txid) => `https://testnet.arcscan.app/tx/${txid}`,
     };
   }
+  if (mode === 'gateway') {
+    const rail = new GatewayRail({ privateKey: env.ARC_PRIVATE_KEY });
+    const payees = { weather: env.ARC_PAYEE_WEATHER, news: env.ARC_PAYEE_NEWS, quotes: env.ARC_PAYEE_QUOTES, maps: env.ARC_PAYEE_MAPS, thief: env.ARC_PAYEE_THIEF };
+    return {
+      rail, payees, label: `${rail.address} · Circle Gateway on Arc testnet (USDC)`,
+      paywall: createGatewaySeller({ payees }),
+      // A receipt's txid is the authorization nonce; Gateway's page for it shows the batch tx once settled.
+      explorer: gatewayTransferUrl,
+    };
+  }
   return { rail: new MockRail('near-testnet'), payees: PAYEES, label: 'mock payments · offline', paywall: createPaidApi(), explorer: undefined };
 }
 
-const mode = process.argv.includes('--near') ? 'near' : process.argv.includes('--arc') ? 'arc' : 'mock';
+const mode = ['near', 'arc', 'gateway'].find((m) => process.argv.includes(`--${m}`)) ?? 'mock';
 const { rail, payees, label, paywall, explorer } = setUp(mode);
 await new Promise((resolve) => paywall.listen(0, '127.0.0.1', resolve));
 const base = `http://127.0.0.1:${paywall.address().port}`;
