@@ -52,11 +52,11 @@ What happens next is up to the guard:
 
 | Decision | Guard does | Ledger status | Agent sees |
 |---|---|---|---|
-| `allow` | pays through the rail | `paid` (or `failed` if the rail throws) | the receipt, or the rail's error |
+| `allow` | pays through the rail | `paid`; `failed` if the rail throws before anything left; `unconfirmed` if it may have left | the receipt, or the rail's error |
 | `ask` | calls `approve(intent, verdict)`. Without an `approve` callback the answer is no | `paid` after a yes, `declined` after a no | the receipt, or `GuardRefused` with `status: 'declined'` |
 | `deny` | nothing moves | `denied` | `GuardRefused` with `status: 'denied'` and `reasons` |
 
-`history` comes from the ledger. `spentTodayUsd` is the sum of `paid` entries on the UTC day of `now`. `recentPricesUsd` holds the last 20 prices paid for the same endpoint.
+`history` comes from the ledger. `spentTodayUsd` is the sum of `paid` and `unconfirmed` entries on the UTC day of `now`. `recentPricesUsd` holds the last 20 such prices for the same endpoint.
 
 ## Rules
 
@@ -90,7 +90,7 @@ The host is known, but it asks to be paid at an address that is not in its `payT
 api.weather.example asked to be paid at 0x1111111111111111111111111111111111111112, which is not one of its known addresses
 ```
 
-Addresses are compared as exact strings. List EVM addresses in the same form the paywall sends them (usually EIP-55 checksummed). Otherwise a correct address in another case is refused as a swap.
+EVM addresses (`0x` and 40 hex digits) match in any letter case, since the x402 client checksums them. Every other address, such as a NEAR account, must match exactly.
 
 ### `service-cap` (deny)
 
@@ -110,7 +110,7 @@ $1.50 is over the $1.00 limit for one payment
 
 ### `daily-budget` (deny)
 
-Today's paid total plus this payment would go over `dailyUsd`. Landing exactly on the budget is allowed. Only `paid` entries count, so denied, declined and failed payments do not use up the budget.
+Today's paid total plus this payment would go over `dailyUsd`. Landing exactly on the budget is allowed. Only `paid` and `unconfirmed` entries count, so denied, declined and failed payments do not use up the budget, and a payment that may have gone out does.
 
 ```
 paying $0.01 would take today's spend to $5.005, over the $5.00 budget
