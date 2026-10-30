@@ -46,6 +46,15 @@ describe('policy', () => {
     assert.deepEqual(codes(verdict), ['payee-swap']);
   });
 
+  test('an EVM payee matches in any letter case; any other address must match exactly', () => {
+    const payee = '0xBbc0B612C19beA521D2eA1Ad7dfEe91D23753244';
+    const evm = { ...policy, networks: ['arc-testnet'], services: { 'api.example': { payTo: [payee.toLowerCase()] } } };
+    const pay = (payTo) => evaluate(intent({ network: 'arc-testnet', payTo }), evm, fresh);
+    assert.equal(pay(payee).decision, 'allow', 'the x402 client checksums what the policy lists in lowercase');
+    assert.deepEqual(codes(pay(`${payee.slice(0, -1)}5`)), ['payee-swap']);
+    assert.deepEqual(codes(evaluate(intent({ payTo: 'PAY.example.testnet' }), policy, fresh)), ['payee-swap']);
+  });
+
   test('a service cap is enforced', () => {
     assert.deepEqual(codes(evaluate(intent({ amount: 400_000n }), policy, fresh)), ['service-cap', 'large-payment']);
   });
