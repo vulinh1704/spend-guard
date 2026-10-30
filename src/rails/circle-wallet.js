@@ -1,8 +1,10 @@
 import { randomBytes, randomUUID } from 'node:crypto';
+import { setTimeout as sleep } from 'node:timers/promises';
 import {
   formatUnits, getAddress, getTypesForEIP712Domain, hexToBigInt, isAddress, isAddressEqual, numberToHex, parseSignature, recoverTypedDataAddress,
   serializeSignature, serializeTypedData, toHex,
 } from 'viem';
+import { PaymentPending } from '../guard.js';
 import { assetOf } from '../money.js';
 import { ARC_USDC, arcTestnet } from './arc.js';
 
@@ -30,6 +32,27 @@ export const TRANSFER_WITH_AUTHORIZATION = [
 ];
 
 const USDC_DECIMALS = assetOf('usdc').decimals;
+
+/** The states in which Circle ends a transfer without sending it. */
+const NO_MONEY_MOVED = new Set(['FAILED', 'DENIED', 'CANCELLED']);
+
+/**
+ * `call()`, or a rejection as soon as `signal` aborts. Circle's SDK sends no signal with its HTTP
+ * requests and sets no timeout, so a request that stalls is abandoned here rather than waited on.
+ *
+ * @template T
+ * @param {AbortSignal} signal
+ * @param {() => Promise<T>} call
+ * @returns {Promise<T>}
+ */
+function before(signal, call) {
+  return new Promise((resolve, reject) => {
+    const abort = () => reject(signal.reason);
+    if (signal.aborted) return abort();
+    signal.addEventListener('abort', abort, { once: true });
+    call().then(resolve, reject).finally(() => signal.removeEventListener('abort', abort));
+  });
+}
 
 /**
  * @typedef {object} CircleClient  The part of Circle's developer-controlled wallets SDK the rail
@@ -64,46 +87,96 @@ export class CircleWalletRail {
    * @param {string} [options.tokenId]
    * @param {typeof ARC_TESTNET_USDC_DOMAIN} [options.domain]
    * @param {number} [options.validForSeconds]  Longest time a signed authorization can be settled in.
-   * @param {number} [options.timeoutMs]  How long to wait for a transfer to complete.
+   * @param {number} [options.timeoutMs]  How long one payment may take, every call to Circle included.
+   * @param {number} [options.pollMs]  How often to ask Circle about a transfer.
    * @param {() => number} [options.now]
    */
-  constructor({ client, walletId, address, mode = 'auto', network = 'arc-testnet', tokenId = ARC_TESTNET_USDC_TOKEN_ID, domain = ARC_TESTNET_USDC_DOMAIN, validForSeconds = 300, timeoutMs = 120_000, now = Date.now }) {
+  constructor({ client, walletId, address, mode = 'auto', network = 'arc-testnet', tokenId = ARC_TESTNET_USDC_TOKEN_ID, domain = ARC_TESTNET_USDC_DOMAIN, validForSeconds = 300, timeoutMs = 120_000, pollMs = 1000, now = Date.now }) {
     if (!['auto', 'transfer', 'authorization'].includes(mode)) throw new Error(`unknown CircleWalletRail mode "${mode}"`);
-    Object.assign(this, { client, walletId, address: getAddress(address), mode, network, tokenId, domain, validForSeconds, timeoutMs, now });
+    Object.assign(this, { client, walletId, address: getAddress(address), mode, network, tokenId, domain, validForSeconds, timeoutMs, pollMs, now });
   }
 
-  /** @param {import('../policy.js').Intent & {x402?: object}} intent */
+  /**
+   * @param {import('../policy.js').Intent & {x402?: object}} intent
+   * @throws {PaymentPending} when Circle may still send the transfer: the guard counts it as spent.
+   */
   async pay(intent) {
     if (intent.asset !== 'usdc') throw new Error(`CircleWalletRail pays in USDC; ${intent.resource} asked for ${intent.asset}`);
     const offer = this.mode === 'transfer' ? null : this.#authorizationOffer(intent);
-    return (offer || this.mode === 'authorization') ? this.#authorize(intent, offer) : this.#transfer(intent);
+    // One deadline for the whole payment. A timer of our own rather than AbortSignal.timeout, whose
+    // timer doesn't keep Node running while it waits.
+    const deadline = new AbortController();
+    const timer = setTimeout(() => deadline.abort(), this.timeoutMs);
+    try {
+      return await ((offer || this.mode === 'authorization') ? this.#authorize(intent, offer, deadline.signal) : this.#transfer(intent, deadline.signal));
+    } finally {
+      clearTimeout(timer);
+    }
   }
 
-  async #transfer(intent) {
-    const created = await this.client.createTransaction({
-      walletId: this.walletId,
-      tokenId: this.tokenId,
-      destinationAddress: intent.payTo,
-      amount: [formatUnits(intent.amount, USDC_DECIMALS)], // Circle takes decimal units: 10000n is '0.01'
-      fee: { type: 'level', config: { feeLevel: 'MEDIUM' } },
-      idempotencyKey: randomUUID(),
-      refId: intent.host, // shown next to the transaction in Circle's console
-    });
+  async #transfer(intent, signal) {
+    const idempotencyKey = randomUUID();
+    let created;
+    try {
+      created = await before(signal, () => this.client.createTransaction({
+        walletId: this.walletId,
+        tokenId: this.tokenId,
+        destinationAddress: intent.payTo,
+        amount: [formatUnits(intent.amount, USDC_DECIMALS)], // Circle takes decimal units: 10000n is '0.01'
+        fee: { type: 'level', config: { feeLevel: 'MEDIUM' } },
+        idempotencyKey,
+        refId: intent.host, // shown next to the transaction in Circle's console
+      }));
+    } catch (err) {
+      if (!signal.aborted) throw err;
+      // The request may have reached Circle; only its answer is missing.
+      throw new PaymentPending(`Circle did not answer the transfer request for ${intent.resource} within ${this.timeoutMs / 1000}s; it may still be sent, so check the wallet's transactions in Circle before paying again`, { network: this.network, circle: { idempotencyKey } }, { cause: err });
+    }
     const id = created.data?.id;
     if (!id) throw new Error(`Circle did not accept the transfer for ${intent.resource}`);
-
-    let tx;
-    const signal = AbortSignal.timeout(this.timeoutMs);
-    try {
-      // Rejects when Circle ends the transaction FAILED, DENIED (its screening), CANCELLED or STUCK.
-      ({ transaction: tx } = (await this.client.getTransaction({ id, waitForState: 'COMPLETE', signal })).data ?? {});
-    } catch (err) {
-      // Giving up waiting does not cancel the transfer, so say where to look before anyone pays again.
-      const detail = signal.aborted ? `still pending after ${this.timeoutMs / 1000}s; check it in Circle before paying again` : err.message;
-      throw new Error(`Circle transaction ${id} for ${intent.resource}: ${detail}`, { cause: err });
-    }
-    if (tx?.state !== 'COMPLETE' || !tx.txHash) throw new Error(`Circle transaction ${id} ended ${tx?.state ?? 'without a state'}`);
+    const tx = await this.#completed(id, intent, signal);
     return { network: this.network, txid: tx.txHash, proof: { txid: tx.txHash, sender: this.address }, circle: { transactionId: id } };
+  }
+
+  /**
+   * Asks Circle about transaction `id` until it is COMPLETE. Circle has accepted the transfer, so
+   * only FAILED, DENIED (its screening) and CANCELLED mean no money moved. Anything else that ends
+   * the wait (STUCK, running out of time, a question Circle won't answer) throws PaymentPending.
+   * The SDK's own waitForState gives up on the first failed request, so the loop is here.
+   */
+  async #completed(id, intent, signal) {
+    const pending = (why, cause) => new PaymentPending(
+      `Circle transaction ${id} for ${intent.resource} ${why}; it may still complete, so check it in Circle before paying again`,
+      { network: this.network, circle: { transactionId: id } }, { cause },
+    );
+    let lastError;
+    const timedOut = (cause) => pending(`is still pending after ${this.timeoutMs / 1000}s${lastError ? ` (last error: ${lastError.message})` : ''}`, cause);
+    for (;;) {
+      let tx;
+      try {
+        tx = (await before(signal, () => this.client.getTransaction({ id }))).data?.transaction;
+        lastError = undefined;
+      } catch (err) {
+        if (signal.aborted) throw timedOut(err);
+        // No answer, a rate limit or a server error passes; another 4xx (bad key, unknown id) won't.
+        if (err.status >= 400 && err.status < 500 && err.status !== 408 && err.status !== 429) throw pending(`could not be checked (${err.message})`, err);
+        lastError = err;
+      }
+      if (tx?.state === 'COMPLETE') {
+        if (tx.txHash) return tx;
+        throw pending('is COMPLETE without a tx hash');
+      }
+      if (NO_MONEY_MOVED.has(tx?.state)) {
+        throw new Error(`Circle transaction ${id} for ${intent.resource} ended ${tx.state}${tx.errorReason ? ` (${tx.errorReason})` : ''}${tx.errorDetails ? `: ${tx.errorDetails}` : ''}`);
+      }
+      // Circle can still speed up or confirm a STUCK transaction.
+      if (tx?.state === 'STUCK') throw pending('is STUCK');
+      try {
+        await sleep(this.pollMs, undefined, { signal });
+      } catch (err) {
+        throw timedOut(err);
+      }
+    }
   }
 
   /**
@@ -113,8 +186,9 @@ export class CircleWalletRail {
    *
    * @param {object} intent
    * @param {{maxTimeoutSeconds?: number}|null} offer
+   * @param {AbortSignal} signal
    */
-  async #authorize(intent, offer) {
+  async #authorize(intent, offer, signal) {
     const ttl = Math.min(offer?.maxTimeoutSeconds ?? this.validForSeconds, this.validForSeconds);
     const validBefore = BigInt(Math.floor(this.now() / 1000) + ttl);
     const message = { from: this.address, to: getAddress(intent.payTo), value: intent.amount, validAfter: 0n, validBefore, nonce: toHex(randomBytes(32)) };
@@ -122,7 +196,13 @@ export class CircleWalletRail {
     // Circle signs a JSON string. Without EIP712Domain in its types, serializeTypedData drops the domain
     // and the signature would be for a hash USDC never checks.
     const data = serializeTypedData({ ...typed, types: { EIP712Domain: getTypesForEIP712Domain({ domain: this.domain }), ...typed.types } });
-    const res = await this.client.signTypedData({ walletId: this.walletId, data, memo: `x402 ${intent.host}: ${intent.description ?? intent.resource}`.slice(0, 100) });
+    let res;
+    try {
+      res = await before(signal, () => this.client.signTypedData({ walletId: this.walletId, data, memo: `x402 ${intent.host}: ${intent.description ?? intent.resource}`.slice(0, 100) }));
+    } catch (err) {
+      // A plain failure: a signature that never reached the agent can't be settled by anyone.
+      throw signal.aborted ? new Error(`Circle did not sign the authorization for ${intent.resource} within ${this.timeoutMs / 1000}s`, { cause: err }) : err;
+    }
 
     const returned = res.data?.signature;
     if (!returned) throw new Error(`Circle returned no signature for ${intent.resource}`);
