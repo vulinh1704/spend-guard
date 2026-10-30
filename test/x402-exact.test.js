@@ -15,8 +15,9 @@ import { createPaidApi } from '../demo/paid-api.js';
 import { Guard, GuardRefused } from '../src/guard.js';
 import { Ledger } from '../src/ledger.js';
 import { ARC_USDC, ARC_USDC_DOMAIN, ArcRail } from '../src/rails/arc.js';
+import { gatewayOffer, GatewayRail } from '../src/rails/gateway.js';
 import { chainIdOf, settleAuthorization, signAuthorization, typedData, verifyAuthorization } from '../src/rails/eip3009.js';
-import { assetKey, caip2, decodePayment, encodePayment, networkName, payingFetch, pickRequirement, readPaymentRequired } from '../src/x402.js';
+import { assetKey, caip2, decodePayment, encodePayment, networkName, payingFetch, pickOffer, pickRequirement, readPaymentRequired } from '../src/x402.js';
 
 const KEY = generatePrivateKey();
 const AGENT = privateKeyToAccount(KEY);
@@ -459,6 +460,21 @@ describe('reading x402 offers', () => {
       assert.equal(sent.length, 1, 'no PAYMENT-SIGNATURE was sent');
       assert.equal(guard.ledger.entries.length, 0);
     }
+  });
+
+  test('a Circle Gateway offer goes to the Gateway rail, never to the token\'s own EIP-3009', async () => {
+    const gateway = gatewayOffer({ payTo: PAYEES.weather, amount: 10_000n });
+    const arc = railCountingSignatures();
+    const both = new Guard({ policy: { networks: ['arc-testnet', 'arc-testnet-gateway'] }, rails: [arc, new GatewayRail({ privateKey: KEY, client: {} })] });
+    assert.equal(pickOffer({ x402Version: 2, accepts: [gateway, requirement()] }, both).network, 'arc-testnet-gateway');
+    assert.equal(pickOffer({ x402Version: 2, accepts: [requirement(), gateway] }, both).network, 'arc-testnet', 'the server\'s order still decides');
+    // Its domain names the Gateway Wallet, not the token: the Arc rail must not sign it at all.
+    assert.equal(pickRequirement([gateway], ['arc-testnet'], 2), null);
+    const guard = guardFor('x', arc);
+    const fakeFetch = async () => response402({}, { 'PAYMENT-REQUIRED': encodePayment({ ...v2, accepts: [gateway] }) });
+    await assert.rejects(payingFetch(guard, 'http://x/weather', {}, { fetch: fakeFetch }), /this guard pays the exact scheme in known tokens only/);
+    assert.equal(arc.signed, 0);
+    assert.equal(guard.ledger.entries.length, 0);
   });
 
   test('an offer the guard cannot pay says why, before the guard is asked', async () => {
