@@ -7,7 +7,7 @@
  * JSON-RPC 2.0, one message per line on stdin/stdout (the MCP stdio transport). Nothing else may
  * be written to stdout while the server runs.
  */
-import { existsSync, mkdirSync, readFileSync } from 'node:fs';
+import { mkdirSync, readFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { createInterface } from 'node:readline';
@@ -195,6 +195,7 @@ export function toolRunner({ guard, approvals, dashboardUrl, responseTimeoutMs =
   function spendingStatus(args) {
     const limit = args.limit ?? 10;
     if (!Number.isInteger(limit) || limit < 1 || limit > 50) throw new ToolInputError('limit must be a whole number from 1 to 50');
+    guard.ledger.sync(); // what servers sharing the ledger have spent too
     const now = guard.now();
     const spent = guard.ledger.spentToday(now);
     const daily = usdToMicro(guard.policy.dailyUsd);
@@ -325,8 +326,9 @@ async function readBody(res, type) {
  *   SPEND_GUARD_MOCK_NETWORK  the network the mock rail pretends to pay on. Default near-testnet,
  *                             as the demo paywall (node demo/paid-api.js) asks.
  *   SPEND_GUARD_LEDGER        JSON-lines file of every decision, read back on start so the daily
- *                             budget survives a restart. Default ~/.spend-guard/ledger.jsonl; off
- *                             keeps it in memory.
+ *                             budget survives a restart, and shared, so servers started by several
+ *                             clients share one budget. Default ~/.spend-guard/ledger.jsonl; off
+ *                             keeps it in memory, for this server alone.
  *   NEAR_ACCOUNT_ID, NEAR_PRIVATE_KEY  for near; ARC_PRIVATE_KEY for arc (testnet keys only).
  *
  * @param {NodeJS.ProcessEnv} [env]
@@ -370,26 +372,15 @@ function readPolicy(file) {
 }
 
 /**
- * A ledger that appends to `file` and starts with what is already there. A line that does not
- * parse stops the server: a budget read from half a ledger would let the agent overspend.
+ * A ledger kept in `file`, shared with other servers on the same file, that starts with what is
+ * already there. Read now, so that a line that does not parse stops the server at start.
  *
  * @param {string} file
  */
 export function loadLedger(file) {
   mkdirSync(path.dirname(file), { recursive: true });
   const ledger = new Ledger({ file });
-  if (!existsSync(file)) return ledger;
-  readFileSync(file, 'utf8').split('\n').forEach((line, i) => {
-    if (!line.trim()) return;
-    try {
-      const entry = JSON.parse(line);
-      entry.usd = BigInt(entry.usd);
-      entry.intent.amount = BigInt(entry.intent.amount);
-      ledger.entries.push(entry);
-    } catch (err) {
-      throw new Error(`line ${i + 1} of the ledger ${file} is not a valid entry (${err.message}); fix or move the file`);
-    }
-  });
+  ledger.sync();
   return ledger;
 }
 

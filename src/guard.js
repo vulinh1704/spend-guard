@@ -92,7 +92,8 @@ export class Guard extends EventEmitter {
   }
 
   #serial(step) {
-    const run = this.queue.then(step);
+    // In turn with this guard's other payments, and with other processes sharing the ledger file.
+    const run = this.queue.then(() => this.ledger.exclusive(step));
     this.queue = run.catch(() => {});
     return run;
   }
