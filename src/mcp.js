@@ -22,6 +22,7 @@ export const VERSION = JSON.parse(readFileSync(new URL('../package.json', import
 /** Protocol versions this server speaks, newest first. */
 export const PROTOCOL_VERSIONS = Object.freeze(['2025-11-25', '2025-06-18', '2025-03-26', '2024-11-05']);
 const MAX_BODY = 100_000;
+const RESPONSE_TIMEOUT_MS = 30_000;
 const READ_TIMEOUT_MS = 30_000;
 const METHODS = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'];
 // Set by the guard, or not the agent's to set: a forged Origin or payment header could pass for
@@ -80,11 +81,13 @@ export class ToolInputError extends Error {}
  * @param {Guard} context.guard
  * @param {import('./approval.js').Approvals} [context.approvals]  Without it, flagged payments are declined.
  * @param {string} [context.dashboardUrl]  Where the user answers approvals. The agent may not fetch it.
+ * @param {number} [context.responseTimeoutMs]  How long a server may take to start answering.
  * @returns {(name: string, args?: object, call?: {progress?: (message: string) => void, signal?: AbortSignal}) => Promise<ToolResult>}
  *   `signal` aborts when the client cancels the call: a payment not made by then is not made.
  */
-export function toolRunner({ guard, approvals, dashboardUrl }) {
+export function toolRunner({ guard, approvals, dashboardUrl, responseTimeoutMs = RESPONSE_TIMEOUT_MS }) {
   const dashboard = dashboardUrl ? new URL(dashboardUrl) : null;
+  const timedFetch = fetchWithin(responseTimeoutMs);
 
   async function payAndFetch(args, progress, signal) {
     const url = targetUrl(args.url);
@@ -95,13 +98,15 @@ export function toolRunner({ guard, approvals, dashboardUrl }) {
     // Not followed, so the host the guard judges is always the host that asks for the money.
     const init = { method, headers: requestHeaders(args.headers), body: args.body, redirect: 'manual', signal };
 
-    // What the guard does for this URL while the call runs (one URL, so parallel calls rarely mix).
-    const entries = [];
+    // The intent this call hands the guard. The guard's entries and asks carry that same object,
+    // which tells this call's payment apart from a parallel call's, even for the same URL.
+    let intent = null;
+    const payer = { networks: guard.networks, pay: (i, options) => guard.pay((intent = i), options) };
+    const entry = () => (intent ? guard.ledger.entries.findLast((e) => e.intent === intent) : undefined);
     let settled = null;
     let heartbeat;
-    const onEntry = (e) => e.intent.resource === url && entries.push(e);
     const onAsked = (ask) => {
-      if (ask.intent.resource !== url) return;
+      if (ask.intent !== intent) return;
       const where = dashboardUrl ? ` at ${dashboardUrl}` : '';
       progress(`Waiting for the user to approve ${formatUsd(ask.verdict.usd)} to ${ask.intent.payTo}${where}`);
       // A client that resets its timeout on progress (resetTimeoutOnProgress in the TypeScript SDK)
@@ -110,42 +115,48 @@ export function toolRunner({ guard, approvals, dashboardUrl }) {
       heartbeat = setInterval(() => progress(`Still waiting for the user's approval (${Math.ceil((ask.expiresAt - Date.now()) / 1000)}s left)`), 10_000);
     };
     const onSettled = (s) => {
-      if (s.ask.intent.resource !== url) return;
+      if (s.ask.intent !== intent) return;
       settled = s;
       clearInterval(heartbeat);
     };
-    guard.on('entry', onEntry);
     approvals?.on('asked', onAsked);
     approvals?.on('settled', onSettled);
 
     let res;
+    let type;
+    let body;
     try {
-      res = await payingFetch(guard, url, init);
+      res = await payingFetch(payer, url, init, { fetch: timedFetch });
+      type = res.headers.get('content-type') ?? '';
+      body = await readBody(res, type);
     } catch (err) {
       if (err instanceof GuardRefused) return refusal(err, settled);
-      const failed = entries.find((e) => e.status === 'failed');
-      return toolError(failed ? `The payment failed, so nothing was paid: ${failed.error}` : `Could not fetch ${url}: ${err.message}`);
+      return toolError(failure(url, err, entry()));
     } finally {
       clearInterval(heartbeat);
-      guard.off('entry', onEntry);
       approvals?.off('asked', onAsked);
       approvals?.off('settled', onSettled);
     }
 
-    const paid = entries.find((e) => e.status === 'paid');
-    const type = res.headers.get('content-type') ?? '';
+    const last = entry();
+    const paid = last?.status === 'paid' ? last : null;
     const lines = [`HTTP ${res.status} ${res.statusText}`.trim()];
-    if (paid) {
-      const tx = paid.receipt?.txid ? `, transaction ${paid.receipt.txid}` : '';
-      lines.push(`Paid ${formatUsd(paid.usd)} to ${paid.intent.payTo} on ${paid.intent.network}${tx}${settled?.approved ? ' (approved by the user)' : ''}.`);
-    } else {
-      lines.push('No payment was needed.');
-    }
+    lines.push(paid ? `Paid ${payment(paid)}${settled?.approved ? ' (approved by the user)' : ''}.` : 'No payment was needed.');
     const location = res.headers.get('location');
     if (res.status >= 300 && res.status < 400 && location) lines.push(`Redirects to ${new URL(location, url).href}; not followed: call pay_and_fetch on it if you need it.`);
     if (paid && res.status === 402) lines.push('The server still asks for payment after being paid. Nothing more was paid; tell the user.');
-    lines.push(`content-type: ${type || 'unknown'}`, '', await readBody(res, type));
+    lines.push(`content-type: ${type || 'unknown'}`, '', body);
     return { content: [{ type: 'text', text: lines.join('\n') }], isError: Boolean(paid && res.status === 402) };
+  }
+
+  /** What the agent is told when the call broke for another reason than a refusal. */
+  function failure(url, err, entry) {
+    const why = err.cause?.message ? `${err.message} (${err.cause.message})` : err.message;
+    // Not retried: the request may not be safe to repeat, and a paywall that already took the
+    // proof refuses it a second time. The agent must not pay again for what it already paid for.
+    if (entry?.status === 'paid') return `Paid ${payment(entry)}, but the paid request failed: ${why}. Do not pay again: tell the user, who can check the payment.`;
+    if (entry?.status === 'failed') return `The payment failed, so nothing was paid: ${entry.error}`;
+    return `Could not fetch ${url}: ${why}`;
   }
 
   /** The http(s) URL to fetch, normalized, so that it matches the resource the guard records. */
@@ -232,6 +243,7 @@ export function toolRunner({ guard, approvals, dashboardUrl }) {
 
 const text = (t) => ({ content: [{ type: 'text', text: t }] });
 const toolError = (t) => ({ ...text(t), isError: true });
+const payment = (e) => `${formatUsd(e.usd)} to ${e.intent.payTo} on ${e.intent.network}${e.receipt?.txid ? `, transaction ${e.receipt.txid}` : ''}`;
 const utcDay = (ms) => new Date(ms).toISOString().slice(0, 10);
 const port = (url) => url.port || (url.protocol === 'https:' ? '443' : '80');
 
@@ -249,6 +261,22 @@ function requestHeaders(headers = {}) {
     if (!DROPPED_HEADERS.test(name)) clean[name] = value;
   }
   return clean;
+}
+
+/**
+ * fetch() that gives up when no response has started within `ms`, so a paywall that takes the
+ * payment and then stalls cannot hold the call. Reading the body has its own limit (readBody).
+ */
+function fetchWithin(ms) {
+  return async (url, init = {}) => {
+    const late = new AbortController();
+    const timer = setTimeout(() => late.abort(new Error(`no response within ${ms / 1000}s`)), ms);
+    try {
+      return await fetch(url, { ...init, signal: init.signal ? AbortSignal.any([init.signal, late.signal]) : late.signal });
+    } finally {
+      clearTimeout(timer);
+    }
+  };
 }
 
 /** The body as text, cut at MAX_BODY bytes; binary bodies are described, not sent. */

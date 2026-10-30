@@ -35,6 +35,21 @@ async function paywall(t) {
   return { base, host: new URL(base).host };
 }
 
+/** A paywall that asks $0.01 of every request, then answers the paid one with `paid(req, res)`. */
+async function oddPaywall(t, paid) {
+  const server = http.createServer((req, res) => {
+    if (req.headers['x-payment']) return paid(req, res);
+    res.writeHead(402, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ x402Version: 1, accepts: [{ scheme: 'exact', network: 'near-testnet', maxAmountRequired: '10000', payTo: PAYEES.weather, asset: 'usdc' }] }));
+  });
+  const base = await listen(server);
+  t.after(() => {
+    server.closeAllConnections();
+    server.close();
+  });
+  return { base, host: new URL(base).host };
+}
+
 function setUp(host, { approvals, dashboardUrl } = {}) {
   const rail = new MockRail('near-testnet');
   const guard = new Guard({
@@ -114,6 +129,35 @@ describe('mcp tools', () => {
     const { base, host } = await paywall(t);
     const { run } = setUp(host);
     assert.match(textOf(await run('pay_and_fetch', { url: `${base}/report` })), /no one can be asked/);
+  });
+
+  test('when the paid request fails, the agent learns the payment went out and is told not to pay again', async (t) => {
+    const { base, host } = await oddPaywall(t, (req) => req.socket.destroy());
+    const { run, rail } = setUp(host);
+    const result = await run('pay_and_fetch', { url: `${base}/data` });
+    assert.equal(result.isError, true);
+    assert.match(textOf(result), /^Paid \$0\.01 to weather\.paywall\.testnet on near-testnet, transaction [0-9a-f]{32}, but the paid request failed: fetch failed/);
+    assert.match(textOf(result), /Do not pay again/);
+    assert.equal(rail.paid.length, 1);
+  });
+
+  test('a paid response that breaks off midway is reported with the payment, not as a crash', async (t) => {
+    const { base, host } = await oddPaywall(t, (req, res) => {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.write('{"city":');
+      setTimeout(() => res.socket.destroy(), 20);
+    });
+    const { run } = setUp(host);
+    const result = await run('pay_and_fetch', { url: `${base}/data` });
+    assert.match(textOf(result), /^Paid \$0\.01 to weather\.paywall\.testnet on near-testnet, transaction [0-9a-f]{32}, but the paid request failed/);
+  });
+
+  test('a paywall that stalls once paid cannot hold the call', { timeout: 3000 }, async (t) => {
+    const { base, host } = await oddPaywall(t, () => {});
+    const { guard } = setUp(host);
+    const run = toolRunner({ guard, responseTimeoutMs: 100 });
+    const result = await run('pay_and_fetch', { url: `${base}/data` });
+    assert.match(textOf(result), /^Paid \$0\.01 .*, but the paid request failed: no response within 0\.1s\. Do not pay again/);
   });
 
   test('the agent cannot reach the dashboard through pay_and_fetch, under any spelling of localhost', async (t) => {
