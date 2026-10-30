@@ -38,6 +38,7 @@ On `main`, not published to npm yet.
 - A payment that went out was recorded a second time as `failed` when its ledger line could not be written or an `entry` listener threw, and `pay_and_fetch` told the agent that nothing was paid. It now stays `paid` and the agent gets the response. A line the file can't take waits, and nothing more is paid until the file has it.
 - An x402 v1 `exact` offer that named Arc's USDC contract but no EIP-712 domain was paid by plain transfer (`ArcRail`, and `CircleWalletRail` in `auto`). Such a paywall settles only the signed authorization, so the money left and the agent still got a 402. Now only the demo paywalls' v1 offers, which name the asset instead of a contract, are paid by transfer; other offers without a domain are refused before anything is signed or sent.
 - `CircleWalletRail` in mode `transfer` ignored the paywall's offer and paid an x402 `exact` offer by transfer, which the paywall keeps while still answering 402; each retry paid again. It now refuses any offer that wants a signature before Circle is asked.
+- The demo paywalls' replay checks compared txids and Gateway nonces as sent, but Arc's RPC finds a transaction by its hash in any letter case and with or without `0x`, so one transfer could buy any number of calls. EVM hashes and nonces are now compared lowercased, and `checkArcPayment` takes only a `0x`-prefixed 32-byte hash.
 
 ## 0.1.0 - 2026-10-30
 

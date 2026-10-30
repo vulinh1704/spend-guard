@@ -281,6 +281,10 @@ describe('x402 v2 paywalls paid through Circle Gateway', () => {
     const replay = await send(proof);
     assert.equal(replay.status, 402);
     assert.equal((await replay.json()).error, 'payment already used');
+    // The nonce is hex: in another letter case it is the same bytes, signature and all.
+    const recased = await send({ ...proof, authorization: { ...proof.authorization, nonce: `0x${proof.authorization.nonce.slice(2).toUpperCase()}` } });
+    assert.equal(recased.status, 402);
+    assert.equal((await recased.json()).error, 'payment already used');
 
     const forged = { ...proof, authorization: { ...proof.authorization, nonce: `0x${'11'.repeat(32)}`, from: address() } };
     assert.match((await (await send(forged)).json()).reason, /not from the payer/);

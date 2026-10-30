@@ -44,8 +44,10 @@ export function createGatewaySeller({ payees, settle = settleGatewayPayment }) {
     } catch {
       return send(res, 400, { error: 'PAYMENT-SIGNATURE is not base64 JSON' });
     }
-    const nonce = payment?.payload?.authorization?.nonce;
-    if (!nonce) return send(res, 402, { error: 'not a Gateway authorization' }, required);
+    const raw = payment?.payload?.authorization?.nonce;
+    if (!raw) return send(res, 402, { error: 'not a Gateway authorization' }, required);
+    // Hex, and the signature covers its bytes, not its spelling: in another letter case it is the same payment.
+    const nonce = String(raw).toLowerCase();
     if (used.has(nonce)) return send(res, 402, { error: 'payment already used' }, required);
     // Reserved before any await, so two copies of one payment can't both be served.
     used.add(nonce);
