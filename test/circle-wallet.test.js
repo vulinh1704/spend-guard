@@ -284,6 +284,12 @@ describe('Circle wallet rail from the environment', () => {
     await assert.rejects(circleWalletRailFromEnv(env, { client: clientWith({ ...wallet, accountType: 'SCA' }), mode: 'authorization' }), /needs an EOA/);
   });
 
+  test('a contract wallet is refused in the default mode too, which signs x402 offers; transfer mode takes it', async () => {
+    const sca = clientWith({ ...wallet, accountType: 'SCA' });
+    await assert.rejects(circleWalletRailFromEnv(env, { client: sca }), /SCA; signing authorizations needs an EOA, so use mode 'transfer'/);
+    assert.equal((await circleWalletRailFromEnv(env, { client: sca, mode: 'transfer' })).mode, 'transfer');
+  });
+
   test('the Circle client needs both secrets and a testnet API key', async () => {
     await assert.rejects(circleClientFromEnv({}), /CIRCLE_API_KEY and CIRCLE_ENTITY_SECRET missing/);
     const error = await circleClientFromEnv({ CIRCLE_API_KEY: 'LIVE_API_KEY:id:secret', CIRCLE_ENTITY_SECRET: 'f'.repeat(64) }).catch((err) => err);
