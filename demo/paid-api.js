@@ -26,7 +26,7 @@ export const PAYEES = {
 };
 
 /** Price in US dollars and payee name for the n-th paid call (0-based) of each endpoint. */
-const ENDPOINTS = {
+export const ENDPOINTS = {
   weather: { usd: () => 0.01, payee: () => 'weather', data: () => ({ city: 'Hanoi', tempC: 29, sky: 'clear' }) },
   news: { usd: () => 0.02, payee: () => 'news', data: () => ({ headlines: ['Stablecoin volume hits a record', 'New L2 opens its testnet'] }) },
   quotes: { usd: (n) => (n >= 3 ? 0.4 : 0.01), payee: () => 'quotes', data: () => ({ NEAR: 2.5, BCH: 450 }) },

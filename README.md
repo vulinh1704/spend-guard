@@ -15,13 +15,14 @@ The guard pays HTTP 402 paywalls in the x402 style: the server answers 402 with 
 | Mock (offline demo, tests) | works |
 | NEAR testnet | works: real NEAR transfers, and the paywall verifies each one on chain |
 | Arc testnet (Circle) | works: real USDC transfers, and the paywall checks each receipt's USDC Transfer event |
+| Circle Gateway on Arc testnet | works: gasless USDC nanopayments (x402 v2), settled by Circle in batches on Arc |
 | Bitcoin Cash, Concordium | planned |
 
 ## Try it
 
 ```
 npm install
-npm test                                 # 34 tests
+npm test                                 # 50 tests
 node demo/agent.js                       # offline, mock payments
 node demo/agent.js --dashboard           # live page on http://localhost:4400
 ```
@@ -48,6 +49,18 @@ node scripts/arc-testnet-wallet.js       # agent key and payee addresses in .env
                                          # fund it with test USDC at https://faucet.circle.com (Arc Testnet)
 node demo/agent.js --arc --dashboard     # real USDC transfers, each checked against its receipt
 ```
+
+### Circle Gateway nanopayments on Arc testnet
+
+The agent deposits USDC into Circle's Gateway Wallet once. After that each call is paid with an off-chain authorization: no gas, no transaction per call, and Circle settles the payments on Arc in batches a few minutes later. No Circle account or API key is needed on testnet.
+
+```
+node scripts/gateway-deposit.js 1        # approve + deposit 1 test USDC into Gateway (2 Arc transactions)
+node demo/agent.js --gateway --dashboard # nanopayments to an x402 v2 seller that settles each one with Circle
+node scripts/gateway-status.js           # Gateway balance, and each payment's batch transaction on Arc
+```
+
+A Gateway authorization stays valid for at least 7 days, and the payee can settle it at any time until then. So the guard decides before anything is signed, a signature counts as spent, and a paywall that answers 402 again after being paid gets no second signature. The guard's budgets are what limit spending. The rail also signs nothing the Gateway balance can't cover, counting what it signed that the payee has not settled yet, so no authorization waits for a later deposit to pay it out. It keeps that count in memory, so it starts from zero after a restart.
 
 `.env` is git-ignored. Testnet tokens have no value. Never point the scripts at mainnet.
 

@@ -8,6 +8,8 @@
  *   node demo/agent.js --arc-x402      # x402 v2 'exact' on Arc: the agent only signs EIP-3009
  *                                      # authorizations; the paywall settles them and pays the gas
  *                                      # (needs ARC_FACILITATOR_PRIVATE_KEY, see scripts/arc-facilitator.js)
+ *   node demo/agent.js --gateway       # Circle Gateway nanopayments on Arc testnet (needs .env and a
+ *                                      # Gateway deposit, see scripts/gateway-deposit.js)
  *   node demo/agent.js --dashboard     # also serves the live page on DASHBOARD_PORT (default 4400),
  *                                      # paces the calls for watching, and stays up until Ctrl+C
  */
@@ -16,10 +18,12 @@ import { setTimeout as sleep } from 'node:timers/promises';
 import { createWalletClient, erc20Abi, http } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
 import { createDashboard } from './dashboard.js';
+import { createGatewaySeller } from './gateway-seller.js';
 import { createPaidApi, PAYEES } from './paid-api.js';
 import { Guard, GuardRefused } from '../src/guard.js';
 import { formatUsd } from '../src/money.js';
 import { ARC_USDC, ArcRail, arcTestnet, checkArcPayment } from '../src/rails/arc.js';
+import { GatewayRail, gatewayTransferUrl } from '../src/rails/gateway.js';
 import { MockRail } from '../src/rails/mock.js';
 import { checkNearPayment, NearRail } from '../src/rails/near.js';
 import { payingFetch } from '../src/x402.js';
@@ -62,10 +66,20 @@ function setUp(mode) {
       balance: () => rail.publicClient.readContract({ address: ARC_USDC, abi: erc20Abi, functionName: 'balanceOf', args: [rail.address] }),
     };
   }
+  if (mode === 'gateway') {
+    const rail = new GatewayRail({ privateKey: env.ARC_PRIVATE_KEY });
+    const payees = { weather: env.ARC_PAYEE_WEATHER, news: env.ARC_PAYEE_NEWS, quotes: env.ARC_PAYEE_QUOTES, maps: env.ARC_PAYEE_MAPS, thief: env.ARC_PAYEE_THIEF };
+    return {
+      rail, payees, label: `${rail.address} · Circle Gateway on Arc testnet (USDC)`,
+      paywall: createGatewaySeller({ payees }),
+      // A receipt's txid is the authorization nonce; Gateway's page for it shows the batch tx once settled.
+      explorer: gatewayTransferUrl,
+    };
+  }
   return { rail: new MockRail('near-testnet'), payees: PAYEES, label: 'mock payments · offline', paywall: createPaidApi(), explorer: undefined };
 }
 
-const mode = process.argv.includes('--near') ? 'near' : process.argv.includes('--arc-x402') ? 'arc-x402' : process.argv.includes('--arc') ? 'arc' : 'mock';
+const mode = ['near', 'arc-x402', 'arc', 'gateway'].find((m) => process.argv.includes(`--${m}`)) ?? 'mock';
 const { rail, payees, label, paywall, explorer, balance } = setUp(mode);
 await new Promise((resolve) => paywall.listen(0, '127.0.0.1', resolve));
 const base = `http://127.0.0.1:${paywall.address().port}`;

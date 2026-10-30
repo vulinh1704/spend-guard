@@ -26,6 +26,7 @@ import { assetOf, formatUsd, toMicroUsd, usdToMicro } from './money.js';
  * @property {bigint} amount  Atomic units of `asset`.
  * @property {string} payTo
  * @property {string} [description]
+ * @property {object} [offer]  x402 v2: the `accepts` entry being paid. Policy ignores it; the rail signs against it.
  */
 
 /**
