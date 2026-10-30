@@ -288,10 +288,19 @@ describe('Circle wallet rail: the paywall\'s offer picks the way to pay', () => 
     }
   });
 
-  test('transfer mode ignores the offer', async () => {
-    const client = fakeClient();
-    await rail(client, { mode: 'transfer' }).pay({ ...intent, x402: offer });
-    assert.deepEqual(client.calls.map(([name]) => name), ['createTransaction', 'getTransaction']);
+  test('transfer mode pays by transfer only what a transfer unlocks, and refuses the rest before Circle is asked', async () => {
+    const refused = [offer, { x402Version: 2, ...offer }, { ...offer, extra: undefined }, { x402Version: 1, ...offer, network: 'arc-testnet' }];
+    for (const [i, x402] of refused.entries()) {
+      const client = fakeClient();
+      await assert.rejects(rail(client, { mode: 'transfer' }).pay({ ...intent, x402 }), /mode 'transfer'|can't sign it/, `case ${i}`);
+      assert.equal(client.calls.length, 0, `case ${i}`);
+    }
+    const demo = { x402Version: 1, scheme: 'exact', network: 'eip155:5042002', asset: 'usdc', amount: 10_000n, payTo: PAYEE };
+    for (const x402 of [demo, undefined]) {
+      const client = fakeClient();
+      await rail(client, { mode: 'transfer' }).pay({ ...intent, x402 });
+      assert.deepEqual(client.calls.map(([name]) => name), ['createTransaction', 'getTransaction']);
+    }
   });
 });
 

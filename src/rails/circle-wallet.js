@@ -76,6 +76,8 @@ function before(signal, call) {
  * In 'auto' (the default) the paywall's offer in intent.x402 picks: an x402 'exact' option with
  * USDC's EIP-712 domain is signed; no offer, or one that takes a transfer (the demo paywalls' v1
  * offers), is paid by transfer; any other offer is refused, since a transfer would not unlock it.
+ * 'transfer' (for wallets that can't sign, such as SCA) pays only what 'auto' would pay by
+ * transfer, and refuses the rest.
  */
 export class CircleWalletRail {
   /**
@@ -103,7 +105,9 @@ export class CircleWalletRail {
    */
   async pay(intent) {
     if (intent.asset !== 'usdc') throw new Error(`CircleWalletRail pays in USDC; ${intent.resource} asked for ${intent.asset}`);
-    const offer = this.mode === 'transfer' ? null : this.#authorizationOffer(intent);
+    const offer = this.#authorizationOffer(intent);
+    // Read in every mode: a paywall that settles only a signature would keep a transfer and still answer 402.
+    if (offer && this.mode === 'transfer') throw new Error(`${intent.resource} wants an EIP-3009 authorization, which this wallet does not sign in mode 'transfer'; a transfer would not unlock it`);
     // One deadline for the whole payment. A timer of our own rather than AbortSignal.timeout, whose
     // timer doesn't keep Node running while it waits.
     const deadline = new AbortController();
