@@ -4,3 +4,4 @@ node_modules/
 *.log
 ledger*.jsonl
 .DS_Store
+.mantis/
