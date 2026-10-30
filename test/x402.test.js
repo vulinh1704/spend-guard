@@ -3,7 +3,7 @@ import { after, before, describe, test } from 'node:test';
 import { createPaidApi, PAYEES } from '../demo/paid-api.js';
 import { Guard, GuardRefused } from '../src/guard.js';
 import { MockRail } from '../src/rails/mock.js';
-import { payingFetch, pickRequirement } from '../src/x402.js';
+import { decodePayment, encodePayment, payingFetch, pickRequirement } from '../src/x402.js';
 
 describe('x402 paywalls through the guard', () => {
   let server;
@@ -58,8 +58,31 @@ describe('x402 paywalls through the guard', () => {
   });
 
   test('pickRequirement takes the first option the guard can pay on', () => {
-    const accepts = [{ network: 'base' }, { network: 'bch' }, { network: 'near-testnet' }];
+    const accepts = [{ network: 'base' }, { network: 'bch' }, { network: 'near-testnet' }].map((r) => ({ scheme: 'exact', asset: 'usdc', ...r }));
     assert.equal(pickRequirement(accepts, ['near-testnet', 'bch']).network, 'bch');
     assert.equal(pickRequirement(accepts, ['concordium-testnet']), null);
+  });
+
+  test('v1 sends X-PAYMENT, never PAYMENT-SIGNATURE, and reads X-PAYMENT-RESPONSE', async () => {
+    const sent = [];
+    const spy = (url, init) => (sent.push(new Headers(init?.headers)), fetch(url, init));
+    const rail = new MockRail('near-testnet');
+    const guard = guardFor(rail);
+    const res = await payingFetch(guard, `${base}/news`, {}, { fetch: spy });
+    assert.equal(res.status, 200);
+    const payment = decodePayment(sent[1].get('x-payment'));
+    assert.equal(sent[1].has('payment-signature'), false);
+    assert.deepEqual(Object.keys(payment), ['x402Version', 'scheme', 'network', 'payload']);
+    assert.equal(payment.x402Version, 1);
+    assert.equal(payment.payload.amount, '20000');
+    const { receipt } = guard.ledger.entries.at(-1);
+    assert.deepEqual(receipt.settlement, { success: true, transaction: receipt.txid, network: 'near-testnet' });
+  });
+
+  test('a request that already carries a payment is not paid again', async () => {
+    const rail = new MockRail('near-testnet');
+    const res = await payingFetch(guardFor(rail), `${base}/weather`, { headers: { 'X-PAYMENT': encodePayment({ x402Version: 1, payload: {} }) } });
+    assert.equal(res.status, 402);
+    assert.equal(rail.paid.length, 0);
   });
 });
