@@ -312,20 +312,22 @@ describe('ArcRail signing', () => {
     assert.equal(rail.signed, 0);
   });
 
-  test('an offer without an EIP-712 domain gets the plain transfer, as before', async () => {
+  test('the demo paywall\'s v1 offer, which names the asset instead of a token contract, gets the plain transfer', async () => {
     const rail = new ArcRail({ privateKey: KEY });
     let sent;
     rail.walletClient.prepareTransactionRequest = async (args) => ({ ...args, chainId: 5042002, nonce: 0, gas: 60_000n, maxFeePerGas: 2n, maxPriorityFeePerGas: 1n, type: 'eip1559' });
     rail.walletClient.sendRawTransaction = async ({ serializedTransaction }) => (sent = serializedTransaction);
     rail.publicClient.waitForTransactionReceipt = async () => ({ status: 'success' });
-    await rail.pay(intent(offer({ x402Version: 1, extra: undefined })));
+    await rail.pay(intent(offer({ x402Version: 1, asset: 'usdc', extra: undefined })));
     assert.equal(decodeFunctionData({ abi: erc20Abi, data: parseTransaction(sent).data }).functionName, 'transfer');
   });
 
-  test('a v2 offer without an EIP-712 domain gets neither a transfer nor a signature', async () => {
+  test('an offer for the token contract without its EIP-712 domain gets neither a transfer nor a signature, in v1 or v2', async () => {
     const rail = railCountingSignatures();
-    await assert.rejects(rail.pay(intent(offer({ extra: undefined }))), /without the token's EIP-712 domain/);
-    await assert.rejects(rail.pay(intent(offer({ extra: { name: 'USDC' } }))), /without the token's EIP-712 domain/);
+    for (const x402Version of [1, 2]) {
+      await assert.rejects(rail.pay(intent(offer({ x402Version, extra: undefined }))), /without the token's EIP-712 domain/);
+      await assert.rejects(rail.pay(intent(offer({ x402Version, extra: { name: 'USDC' } }))), /without the token's EIP-712 domain/);
+    }
     assert.equal(rail.signed, 0);
   });
 });
@@ -452,21 +454,25 @@ describe('reading x402 offers', () => {
     ];
     assert.equal(pickRequirement([...skipped, arc], ['arc-testnet'], 2), arc);
     assert.equal(pickRequirement(skipped, ['arc-testnet'], 2), null);
-    // A v1 paywall may check a plain transfer instead, as the demo's does.
-    assert.equal(pickRequirement([requirement({ extra: undefined })], ['arc-testnet'], 1)?.network, ARC);
+    // The demo's v1 paywalls check a plain transfer instead, and say so by naming the asset, not a contract.
+    assert.equal(pickRequirement([requirement({ asset: 'usdc', extra: undefined })], ['arc-testnet'], 1)?.network, ARC);
+    assert.equal(pickRequirement([requirement({ extra: undefined })], ['arc-testnet'], 1), null);
   });
 
-  test('a v2 offer without the token\'s EIP-712 domain is refused before anything is signed or sent', async () => {
+  test('an offer for the token contract without its EIP-712 domain is refused before anything is signed or sent, in v1 or v2', async () => {
+    const v1Body = (extra) => ({ x402Version: 1, accepts: [{ scheme: 'exact', network: 'arc-testnet', maxAmountRequired: '10000', asset: ARC_USDC, payTo: PAYEES.weather, resource: 'http://x/weather', maxTimeoutSeconds: 60, extra }] });
     for (const extra of [undefined, {}, { name: 'USDC' }]) {
-      const offered = { ...v2, accepts: [{ ...requirement(), extra }] };
-      const sent = [];
-      const fakeFetch = async (url, init) => (sent.push(new Headers(init?.headers)), response402({}, { 'PAYMENT-REQUIRED': encodePayment(offered) }));
-      const rail = railCountingSignatures();
-      const guard = guardFor('x', rail);
-      await assert.rejects(payingFetch(guard, 'http://x/weather', {}, { fetch: fakeFetch }), /asks for exact 0x3600.* without its EIP-712 domain on arc-testnet/);
-      assert.equal(rail.signed, 0, `extra: ${JSON.stringify(extra)}`);
-      assert.equal(sent.length, 1, 'no PAYMENT-SIGNATURE was sent');
-      assert.equal(guard.ledger.entries.length, 0);
+      const offers = [response402({}, { 'PAYMENT-REQUIRED': encodePayment({ ...v2, accepts: [{ ...requirement(), extra }] }) }), response402(v1Body(extra))];
+      for (const offered of offers) {
+        const sent = [];
+        const fakeFetch = async (url, init) => (sent.push(new Headers(init?.headers)), offered.clone());
+        const rail = railCountingSignatures();
+        const guard = guardFor('x', rail);
+        await assert.rejects(payingFetch(guard, 'http://x/weather', {}, { fetch: fakeFetch }), /asks for exact 0x3600.* without its EIP-712 domain on arc-testnet/);
+        assert.equal(rail.signed, 0, `extra: ${JSON.stringify(extra)}`);
+        assert.equal(sent.length, 1, 'no payment was sent');
+        assert.equal(guard.ledger.entries.length, 0);
+      }
     }
   });
 

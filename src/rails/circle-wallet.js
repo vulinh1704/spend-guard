@@ -6,6 +6,7 @@ import {
 } from 'viem';
 import { PaymentPending } from '../guard.js';
 import { assetOf } from '../money.js';
+import { takesTransfer } from '../x402.js';
 import { ARC_USDC, arcTestnet } from './arc.js';
 
 /**
@@ -73,8 +74,8 @@ function before(signal, call) {
  *   ({signature, authorization}); no transaction is sent, the paywall settles it.
  *
  * In 'auto' (the default) the paywall's offer in intent.x402 picks: an x402 'exact' option with
- * USDC's EIP-712 domain is signed; no offer, or an x402 v1 one without a domain, is paid by
- * transfer; any other offer is refused, since a transfer would not unlock it.
+ * USDC's EIP-712 domain is signed; no offer, or one that takes a transfer (the demo paywalls' v1
+ * offers), is paid by transfer; any other offer is refused, since a transfer would not unlock it.
  */
 export class CircleWalletRail {
   /**
@@ -222,19 +223,20 @@ export class CircleWalletRail {
 
   /**
    * The x402 'exact' EIP-3009 option behind this intent, or null when the paywall wants a transfer:
-   * no offer, or an x402 v1 one without an EIP-712 domain, like the demo paywall's. Anything else
-   * is signed or refused, never paid some other way: an x402 v2 or eip155 paywall settles only an
-   * authorization, so a transfer would move the money and still get a 402.
+   * no offer, or one that takes a transfer (the demo paywalls' v1 offers, see takesTransfer).
+   * Anything else is signed or refused, never paid some other way: a paywall that names the token
+   * contract settles only an authorization, so a transfer would move the money and still get a 402.
    */
   #authorizationOffer(intent) {
     const x402 = intent.x402;
     if (!x402) return null;
     const option = x402.raw ?? x402;
-    const version = x402.x402Version ?? x402.version; // read before unwrapping: a raw v2 option has none
+    // Read before unwrapping: a raw option has none. A bare v1 requirement names its network, v2 gives CAIP-2.
+    const version = x402.x402Version ?? x402.version ?? (/^eip155:/.test(option.network ?? '') ? 2 : 1);
     const extra = option.extra ?? {};
     if (option.scheme !== 'exact') throw new Error(`${intent.resource} wants the x402 '${option.scheme}' scheme; this wallet pays 'exact' only`);
+    if (takesTransfer({ ...option, x402Version: version })) return null;
     if (!extra.name && !extra.version) {
-      if (version === 1 || (version === undefined && !/^eip155:/.test(option.network ?? ''))) return null;
       throw new Error(`${intent.resource} offers x402 'exact' on ${option.network} without the token's EIP-712 domain; this wallet can't sign it, and a transfer would not unlock it`);
     }
     if ((extra.assetTransferMethod ?? 'eip3009') !== 'eip3009' || (extra.paymentFlow ?? 'authorization') !== 'authorization') {

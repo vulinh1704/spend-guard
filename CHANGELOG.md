@@ -36,6 +36,7 @@ On `main`, not published to npm yet.
 - The demo paywall takes a txid before it checks the payment on chain, so the same proof sent twice at once buys one call, not two.
 - A transfer that was sent but whose confirmation failed was recorded as `failed` and not counted against the budget.
 - A payment that went out was recorded a second time as `failed` when its ledger line could not be written or an `entry` listener threw, and `pay_and_fetch` told the agent that nothing was paid. It now stays `paid` and the agent gets the response. A line the file can't take waits, and nothing more is paid until the file has it.
+- An x402 v1 `exact` offer that named Arc's USDC contract but no EIP-712 domain was paid by plain transfer (`ArcRail`, and `CircleWalletRail` in `auto`). Such a paywall settles only the signed authorization, so the money left and the agent still got a 402. Now only the demo paywalls' v1 offers, which name the asset instead of a contract, are paid by transfer; other offers without a domain are refused before anything is signed or sent.
 
 ## 0.1.0 - 2026-10-30
 

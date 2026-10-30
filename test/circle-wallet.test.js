@@ -278,6 +278,16 @@ describe('Circle wallet rail: the paywall\'s offer picks the way to pay', () => 
     }
   });
 
+  test('an x402 v1 offer for the USDC contract without its domain is refused: such a paywall settles only a signature', async () => {
+    const raw = { scheme: 'exact', network: 'arc-testnet', maxAmountRequired: '10000', payTo: PAYEE, asset: ARC_USDC, resource: intent.resource };
+    const read = { x402Version: 1, scheme: 'exact', network: 'eip155:5042002', asset: ARC_USDC, amount: 10_000n, payTo: PAYEE };
+    for (const [i, x402] of [raw, read].entries()) {
+      const client = fakeClient();
+      await assert.rejects(rail(client).pay({ ...intent, x402 }), /without the token's EIP-712 domain/, `case ${i}`);
+      assert.equal(client.calls.length, 0, `case ${i}`);
+    }
+  });
+
   test('transfer mode ignores the offer', async () => {
     const client = fakeClient();
     await rail(client, { mode: 'transfer' }).pay({ ...intent, x402: offer });
