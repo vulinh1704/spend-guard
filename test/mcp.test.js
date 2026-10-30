@@ -7,7 +7,7 @@ import assert from 'node:assert/strict';
 import { spawn, spawnSync } from 'node:child_process';
 import { once } from 'node:events';
 import { existsSync } from 'node:fs';
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
@@ -337,6 +337,31 @@ describe('mcp configuration', () => {
     const file = path.join(dir, 'broken.jsonl');
     await writeFile(file, '{"at":1,"status":"paid","usd":"1","intent":{"amount":"1"},"reasons":[]}\nnot json\n');
     assert.throws(() => loadLedger(file), /line 2 of the ledger .* is not a valid entry/);
+  });
+
+  test('a payment the ledger file cannot take stays paid, and nothing more is paid until the file has it', { skip: process.getuid?.() === 0 && 'root writes to read-only files' }, async (t) => {
+    const { base, host } = await paywall(t);
+    const file = path.join(dir, 'read-only', 'ledger.jsonl');
+    const rail = new MockRail('near-testnet');
+    const guard = new Guard({ policy: { ...policy, services: { [host]: { payTo: KNOWN } } }, rails: [rail], ledger: loadLedger(file) });
+    const run = toolRunner({ guard });
+    assert.match(textOf(await run('pay_and_fetch', { url: `${base}/weather` })), /^HTTP 200 OK\nPaid \$0\.01 /);
+    // As a full disk or a read-only mount would, after the server started.
+    await chmod(file, 0o444);
+
+    const paid = await run('pay_and_fetch', { url: `${base}/news` });
+    assert.equal(paid.isError, false, textOf(paid));
+    assert.match(textOf(paid), /^HTTP 200 OK\nPaid \$0\.02 [^]*headlines/);
+    assert.deepEqual(guard.ledger.entries.map((e) => e.status), ['paid', 'paid']);
+
+    const stopped = await run('pay_and_fetch', { url: `${base}/weather` });
+    assert.equal(stopped.isError, true);
+    assert.match(textOf(stopped), /the ledger .* can't be written, so no payment is decided until it can/);
+    assert.equal(rail.paid.length, 2);
+
+    await chmod(file, 0o644);
+    assert.match(textOf(await run('pay_and_fetch', { url: `${base}/weather` })), /^HTTP 200 OK\nPaid \$0\.01 /);
+    assert.equal(loadLedger(file).spentToday(Date.now()), 40_000n, 'another server on the file counts the payment that waited');
   });
 
   test('guardFromEnv: mock by default, networks from the rails, policy from a file', async () => {

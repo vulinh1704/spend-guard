@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { once } from 'node:events';
 import { describe, test } from 'node:test';
 import { Guard, GuardRefused, PaymentPending, PaymentUnconfirmed } from '../src/guard.js';
 import { MockRail } from '../src/rails/mock.js';
@@ -164,5 +165,21 @@ describe('guard', () => {
     await guard.pay(intent(0.1));
     await guard.pay({ ...intent(0.1), network: 'bch' }).catch(() => {});
     assert.deepEqual(seen, ['paid', 'denied']);
+  });
+
+  test('a listener that throws cannot turn a payment that went out into a failure', async () => {
+    const rail = new MockRail('near-testnet');
+    const guard = new Guard({ policy, rails: [rail] });
+    const seen = [];
+    guard.on('entry', () => { throw new Error('listener broke'); });
+    guard.on('entry', (e) => seen.push(e.status));
+    const warned = once(process, 'warning');
+    const receipt = await guard.pay(intent(0.1));
+    assert.equal(receipt.network, 'near-testnet');
+    assert.equal(rail.paid.length, 1);
+    assert.deepEqual(guard.ledger.entries.map((e) => e.status), ['paid']);
+    assert.deepEqual(seen, ['paid'], 'the other listeners still hear of it');
+    assert.match((await warned)[0].message, /a listener of 'entry' threw: listener broke/);
+    await assert.rejects(guard.pay({ ...intent(0.1), payTo: 'drain.testnet' }), GuardRefused);
   });
 });
