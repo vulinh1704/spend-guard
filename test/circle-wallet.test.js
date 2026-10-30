@@ -148,7 +148,7 @@ describe('Circle wallet rail: the paywall\'s offer picks the way to pay', () => 
     assert.deepEqual(signing.calls.map(([name]) => name), ['signTypedData']);
 
     const normalized = fakeClient();
-    await rail(normalized).pay({ ...intent, x402: { raw: offer } });
+    await rail(normalized).pay({ ...intent, x402: { version: 2, raw: offer } });
     assert.deepEqual(normalized.calls.map(([name]) => name), ['signTypedData']);
 
     const pushing = fakeClient();
@@ -175,6 +175,34 @@ describe('Circle wallet rail: the paywall\'s offer picks the way to pay', () => 
       const client = fakeClient();
       await assert.rejects(rail(client).pay({ ...intent, x402 }), error);
       assert.equal(client.calls.length, 0);
+    }
+  });
+
+  test('an x402 v2 offer the wallet can\'t sign is refused, not paid by a transfer the paywall would ignore', async () => {
+    const cases = [
+      { ...offer, extra: undefined },
+      { ...offer, extra: {} },
+      { ...offer, scheme: 'upto' },
+      { ...offer, network: 'eip155:5042', extra: undefined }, // Arc mainnet
+      { x402Version: 2, ...offer, network: 'arc-testnet', extra: undefined },
+      { version: 2, raw: { ...offer, network: 'arc-testnet', extra: undefined } },
+      { x402Version: 1, ...offer, network: 'arc-testnet', scheme: 'upto', extra: undefined },
+    ];
+    for (const x402 of cases) {
+      const client = fakeClient();
+      await assert.rejects(rail(client).pay({ ...intent, x402 }), /pays 'exact' only|can't sign it, and a transfer would not unlock it/);
+      assert.equal(client.calls.length, 0, JSON.stringify(x402));
+    }
+  });
+
+  test('an x402 v1 offer without a domain, like the demo paywall\'s, is paid by transfer', async () => {
+    const v1 = { scheme: 'exact', network: 'arc-testnet', maxAmountRequired: '10000', payTo: PAYEE, asset: 'usdc', resource: intent.resource };
+    // The same offer as the x402 client reads it: version 1, CAIP-2 network.
+    const read = { x402Version: 1, scheme: 'exact', network: 'eip155:5042002', asset: 'usdc', amount: 10_000n, payTo: PAYEE };
+    for (const x402 of [v1, read]) {
+      const client = fakeClient();
+      await rail(client).pay({ ...intent, x402 });
+      assert.deepEqual(client.calls.map(([name]) => name), ['createTransaction', 'getTransaction']);
     }
   });
 
