@@ -125,6 +125,33 @@ describe('dashboard', () => {
   });
 });
 
+describe('dashboard settlements', () => {
+  test('a signed payment gets its transaction link once the paywall reports the settlement', { timeout: 5000 }, async (t) => {
+    const rail = { network: 'near-testnet', pay: async () => ({ network: 'near-testnet', txid: undefined, proof: { signature: '0x' } }) };
+    const other = new Guard({ policy, rails: [rail] });
+    const server = createDashboard(other, { explorer: (tx) => `https://explorer.example/tx/${tx}` });
+    const url = await listen(server);
+    t.after(() => {
+      server.closeAllConnections();
+      server.close();
+    });
+    const stream = await events(`${url}/events`);
+    const ok = await other.pay(intent('pay.testnet'));
+    const failed = await other.pay(intent('pay.testnet', 0.02));
+    const [first, second] = [(await stream.next()).data, (await stream.next()).data];
+    assert.deepEqual([first.status, first.tx, first.txUrl], ['paid', null, null], 'nothing on chain yet');
+
+    other.settled(ok, { success: true, transaction: 'abc', network: 'near-testnet' });
+    other.settled(failed, { success: false, errorReason: 'invalid_exact_evm_transaction_simulation_failed', transaction: '' });
+    const settled = await stream.next();
+    assert.deepEqual([settled.event, settled.data.id, settled.data.txUrl, settled.data.unsettled], ['receipt', first.id, 'https://explorer.example/tx/abc', null]);
+    const refused = await stream.next();
+    assert.deepEqual([refused.event, refused.data.id, refused.data.tx, refused.data.unsettled], ['receipt', second.id, null, 'invalid_exact_evm_transaction_simulation_failed']);
+    stream.close();
+    assert.match(await (await fetch(url)).text(), /addEventListener\('receipt'/);
+  });
+});
+
 describe('dashboard approvals', () => {
   let server;
   let base;
