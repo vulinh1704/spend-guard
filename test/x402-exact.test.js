@@ -4,12 +4,16 @@
  * viem's clients.
  */
 import assert from 'node:assert/strict';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { after, describe, test } from 'node:test';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { domainSeparator, encodeAbiParameters, encodeEventTopics, erc20Abi, parseSignature, recoverTypedDataAddress, serializeSignature, toHex, verifyTypedData } from 'viem';
 import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts';
 import { createPaidApi } from '../demo/paid-api.js';
 import { Guard, GuardRefused } from '../src/guard.js';
+import { Ledger } from '../src/ledger.js';
 import { ARC_USDC, ARC_USDC_DOMAIN, ArcRail } from '../src/rails/arc.js';
 import { chainIdOf, settleAuthorization, signAuthorization, typedData, verifyAuthorization } from '../src/rails/eip3009.js';
 import { assetKey, caip2, decodePayment, encodePayment, networkName, payingFetch, pickRequirement, readPaymentRequired } from '../src/x402.js';
@@ -89,13 +93,14 @@ function railCountingSignatures() {
   return rail;
 }
 
-function guardFor(host, rail = railCountingSignatures()) {
+function guardFor(host, rail = railCountingSignatures(), ledger = undefined) {
   return new Guard({
     policy: {
       networks: ['arc-testnet'], dailyUsd: 2, perPaymentUsd: 1, askAboveUsd: 1, spikeRatio: 5,
       services: { [host]: { payTo: [PAYEES.weather, PAYEES.news, PAYEES.quotes, PAYEES.maps] } },
     },
     rails: [rail],
+    ledger,
   });
 }
 
@@ -237,6 +242,37 @@ describe('x402 v2 with the exact scheme, through the guard', () => {
     assert.equal(entry.status, 'paid');
     assert.equal(entry.receipt.txid, undefined);
     assert.equal(guard.ledger.spentToday(Date.now()), 20_000n);
+  });
+
+  test('a ledger file gets the settlement as a line of its own, naming the paid entry', async (t) => {
+    const dir = mkdtempSync(join(tmpdir(), 'spend-guard-'));
+    t.after(() => rmSync(dir, { recursive: true, force: true }));
+    const file = join(dir, 'ledger.jsonl');
+    const ok = await paywall();
+    const failing = await paywall({ chain: fakeChain({ simulation: new Error('FiatTokenV2: invalid signature') }) });
+    const guard = guardFor(ok.host, railCountingSignatures(), new Ledger({ file }));
+    // The second paywall sells from the same payees but cannot settle.
+    guard.policy.services[failing.host] = guard.policy.services[ok.host];
+    const reported = [];
+    guard.on('settled', (entry) => reported.push(entry));
+
+    assert.equal((await payingFetch(guard, `${ok.base}/weather`)).status, 200);
+    assert.equal((await payingFetch(guard, `${failing.base}/news`)).status, 402);
+
+    const [paid, settled, unpaid, refused] = readFileSync(file, 'utf8').trim().split('\n').map((line) => JSON.parse(line));
+    // The paid line is written when the authorization is signed, before the paywall settles it.
+    assert.equal(paid.status, 'paid');
+    assert.equal(paid.receipt.txid, undefined);
+    assert.deepEqual([settled.status, settled.entry, settled.txid, settled.settlement.success], ['settled', paid.id, toHex(1, { size: 32 }), true]);
+    assert.equal(unpaid.status, 'paid');
+    assert.notEqual(unpaid.id, paid.id);
+    assert.deepEqual([refused.status, refused.entry, refused.txid, refused.settlement.errorReason], ['settled', unpaid.id, undefined, 'invalid_exact_evm_transaction_simulation_failed']);
+
+    // In memory the settlement joins the entry; it is not a payment of its own.
+    assert.deepEqual(guard.ledger.entries.map((e) => e.id), [paid.id, unpaid.id]);
+    assert.equal(guard.ledger.entries[0].receipt.txid, settled.txid);
+    assert.deepEqual(reported, guard.ledger.entries);
+    assert.equal(guard.ledger.spentToday(Date.now()), 30_000n);
   });
 
   test('the v1 body is still there for transfer-proof clients', async () => {
