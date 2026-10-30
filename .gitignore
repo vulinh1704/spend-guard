@@ -5,3 +5,6 @@ node_modules/
 ledger*.jsonl
 .DS_Store
 .mantis/
+# Circle entity secret recovery files: keep them outside the repo
+recovery/
+recovery_file_*.dat
