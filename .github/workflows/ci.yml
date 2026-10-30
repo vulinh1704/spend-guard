@@ -54,7 +54,9 @@ jobs:
         run: |
           grep -q "is 40x the usual" demo.log
           grep -q "rnaps.paywall.testnet, which is not one of its known addresses" demo.log
-          grep -q "needs your approval" demo.log
+          # The ask line itself, followed by the decline it led to: the /quotes denial also says
+          # "needs your approval", so that phrase alone would pass even if nobody was asked.
+          grep -A1 -F '? asks you: $0.30 is above the $0.25 that needs your approval' demo.log | grep -q '^✗ declined /report'
           grep -q "3 payments stopped" demo.log
       - name: Check the package contents
         run: npm pack --dry-run
