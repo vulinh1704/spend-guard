@@ -21,7 +21,7 @@ The guard pays HTTP 402 paywalls in the x402 style: the server answers 402 with 
 
 ```
 npm install
-npm test                                 # 34 tests
+npm test                                 # 37 tests
 node demo/agent.js                       # offline, mock payments
 node demo/agent.js --dashboard           # live page on http://localhost:4400
 ```

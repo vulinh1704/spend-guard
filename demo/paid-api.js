@@ -69,12 +69,18 @@ export function createPaidApi({ network = 'near-testnet', asset = 'usdc', payees
     if (!header) return send(res, 402, { x402Version: 1, error: 'payment required', accepts: [requirement] });
 
     const { payload } = decodePayment(header);
-    // One payment buys one call: a replayed proof is refused even though it is genuine.
-    if (payload?.txid && used.has(payload.txid)) return send(res, 402, { x402Version: 1, error: 'payment already used', accepts: [requirement] });
+    const txid = payload?.txid;
+    // One payment buys one call: a replayed proof is refused even though it is genuine. The txid is
+    // taken before the async check, so the same proof sent twice at once cannot buy two calls.
+    if (txid && used.has(txid)) return send(res, 402, { x402Version: 1, error: 'payment already used', accepts: [requirement] });
+    if (txid) used.add(txid);
     const problem = await verify(payload, { payTo, amount });
-    if (problem) return send(res, 402, { x402Version: 1, error: problem, accepts: [requirement] });
+    if (problem) {
+      // Not paid (yet): free the txid, so the proof can be sent again once the chain has it.
+      used.delete(txid);
+      return send(res, 402, { x402Version: 1, error: problem, accepts: [requirement] });
+    }
 
-    if (payload?.txid) used.add(payload.txid);
     calls[name]++;
     send(res, 200, endpoint.data());
   });
