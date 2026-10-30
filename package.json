@@ -14,5 +14,8 @@
     "demo:api": "node demo/paid-api.js",
     "demo:agent": "node demo/agent.js"
   },
-  "license": "MIT"
+  "license": "MIT",
+  "dependencies": {
+    "near-api-js": "^7.4.0"
+  }
 }
