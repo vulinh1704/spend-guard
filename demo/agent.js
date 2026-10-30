@@ -5,16 +5,21 @@
  *   node demo/agent.js                 # mock payments, offline
  *   node demo/agent.js --near          # real NEAR testnet transfers (needs .env, see scripts/)
  *   node demo/agent.js --arc           # real USDC transfers on Circle's Arc testnet (needs .env)
+ *   node demo/agent.js --arc-x402      # x402 v2 'exact' on Arc: the agent only signs EIP-3009
+ *                                      # authorizations; the paywall settles them and pays the gas
+ *                                      # (needs ARC_FACILITATOR_PRIVATE_KEY, see scripts/arc-facilitator.js)
  *   node demo/agent.js --dashboard     # also serves the live page on DASHBOARD_PORT (default 4400),
  *                                      # paces the calls for watching, and stays up until Ctrl+C
  */
 import { existsSync } from 'node:fs';
 import { setTimeout as sleep } from 'node:timers/promises';
+import { createWalletClient, erc20Abi, http } from 'viem';
+import { privateKeyToAccount } from 'viem/accounts';
 import { createDashboard } from './dashboard.js';
 import { createPaidApi, PAYEES } from './paid-api.js';
 import { Guard, GuardRefused } from '../src/guard.js';
 import { formatUsd } from '../src/money.js';
-import { ArcRail, checkArcPayment } from '../src/rails/arc.js';
+import { ARC_USDC, ArcRail, arcTestnet, checkArcPayment } from '../src/rails/arc.js';
 import { MockRail } from '../src/rails/mock.js';
 import { checkNearPayment, NearRail } from '../src/rails/near.js';
 import { payingFetch } from '../src/x402.js';
@@ -40,20 +45,28 @@ function setUp(mode) {
       explorer: (txid) => `https://testnet.nearblocks.io/txns/${txid}`,
     };
   }
-  if (mode === 'arc') {
+  if (mode === 'arc' || mode === 'arc-x402') {
     const rail = new ArcRail({ privateKey: env.ARC_PRIVATE_KEY });
     const payees = { weather: env.ARC_PAYEE_WEATHER, news: env.ARC_PAYEE_NEWS, quotes: env.ARC_PAYEE_QUOTES, maps: env.ARC_PAYEE_MAPS, thief: env.ARC_PAYEE_THIEF };
+    let exact;
+    if (mode === 'arc-x402') {
+      if (!env.ARC_FACILITATOR_PRIVATE_KEY) throw new Error('no ARC_FACILITATOR_PRIVATE_KEY in .env; run node scripts/arc-facilitator.js');
+      // The paywall's own key: it submits the agent's authorizations and pays their gas.
+      const walletClient = createWalletClient({ account: privateKeyToAccount(env.ARC_FACILITATOR_PRIVATE_KEY), chain: arcTestnet, transport: http() });
+      exact = { publicClient: rail.publicClient, walletClient };
+    }
     return {
-      rail, payees, label: `${rail.address} · Arc testnet (USDC)`,
-      paywall: createPaidApi({ network: 'arc-testnet', asset: 'usdc', payees, verify: (p, e) => checkArcPayment(rail.publicClient, p, e) }),
+      rail, payees, label: `${rail.address} · Arc testnet (USDC)${exact ? ' · x402 v2 exact, EIP-3009' : ''}`,
+      paywall: createPaidApi({ network: 'arc-testnet', asset: 'usdc', payees, verify: (p, e) => checkArcPayment(rail.publicClient, p, e), exact }),
       explorer: (txid) => `https://testnet.arcscan.app/tx/${txid}`,
+      balance: () => rail.publicClient.readContract({ address: ARC_USDC, abi: erc20Abi, functionName: 'balanceOf', args: [rail.address] }),
     };
   }
   return { rail: new MockRail('near-testnet'), payees: PAYEES, label: 'mock payments · offline', paywall: createPaidApi(), explorer: undefined };
 }
 
-const mode = process.argv.includes('--near') ? 'near' : process.argv.includes('--arc') ? 'arc' : 'mock';
-const { rail, payees, label, paywall, explorer } = setUp(mode);
+const mode = process.argv.includes('--near') ? 'near' : process.argv.includes('--arc-x402') ? 'arc-x402' : process.argv.includes('--arc') ? 'arc' : 'mock';
+const { rail, payees, label, paywall, explorer, balance } = setUp(mode);
 await new Promise((resolve) => paywall.listen(0, '127.0.0.1', resolve));
 const base = `http://127.0.0.1:${paywall.address().port}`;
 
@@ -84,12 +97,18 @@ if (withDashboard) {
 }
 
 if (mode !== 'mock') console.log(dim(`agent ${label}\n`));
+const before = await balance?.();
 for (const name of PLAN) {
   if (withDashboard) await sleep(1200);
   try {
     const res = await payingFetch(guard, `${base}/${name}`);
     const paid = guard.ledger.entries.at(-1);
-    const tx = explorer ? dim(` ${explorer(paid.receipt.txid)}`) : '';
+    if (!res.ok) {
+      // Signed but not delivered: the signature still counts against the budget until it expires.
+      console.log(`${red(`✗ ${res.status}`)}    /${name.padEnd(8)} ${paid.receipt.settlement?.errorReason ?? (await res.text())}`);
+      continue;
+    }
+    const tx = explorer && paid.receipt.txid ? dim(` ${explorer(paid.receipt.txid)}`) : '';
     console.log(`${green('✓ paid')} ${formatUsd(paid.usd).padEnd(7)} /${name.padEnd(8)} ${dim(JSON.stringify(await res.json()))}${tx}`);
   } catch (err) {
     if (!(err instanceof GuardRefused)) throw err;
@@ -98,5 +117,11 @@ for (const name of PLAN) {
 }
 
 console.log(dim(`\nspent today ${formatUsd(guard.ledger.spentToday(Date.now()))} of $1.00; ${guard.ledger.entries.filter((e) => e.status !== 'paid').length} payments stopped`));
+if (balance) {
+  // USDC has 6 decimals, so atomic units are micro-dollars. With x402 exact the difference is the
+  // payments alone: the paywall paid the gas.
+  const after = await balance();
+  console.log(dim(`agent wallet ${formatUsd(before)} → ${formatUsd(after)} USDC (${formatUsd(after - before)})`));
+}
 paywall.close();
 if (dashboard) console.log(dim('dashboard stays up; Ctrl+C to stop'));
