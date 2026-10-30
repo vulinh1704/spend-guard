@@ -161,7 +161,7 @@ describe('dashboard approvals', () => {
 
   test('only the page itself can answer, and only a payment that is waiting', async () => {
     const asked = new Promise((resolve) => approvals.once('asked', resolve));
-    const paying = guard.pay(intent('pay.testnet', 0.3, '/report'));
+    const declined = assert.rejects(guard.pay(intent('pay.testnet', 0.3, '/report')), (err) => err instanceof GuardRefused && err.status === 'declined');
     const { id } = await asked;
     const port = new URL(base).port;
 
@@ -179,7 +179,7 @@ describe('dashboard approvals', () => {
 
     assert.equal((await fromPage(base, id, false)).status, 200);
     assert.equal((await fromPage(base, id, true)).status, 404, 'an answered payment cannot be approved after all');
-    await assert.rejects(paying, (err) => err instanceof GuardRefused && err.status === 'declined');
+    await declined;
     assert.equal(rail.paid.length, 1, 'only the payment approved in the first test went out');
   });
 

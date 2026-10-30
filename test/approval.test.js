@@ -72,6 +72,22 @@ describe('approvals', () => {
     assert.equal(approvals.decide(id, true), false);
   });
 
+  test('an ask is withdrawn when the payer stops waiting, and cannot be approved after', async (t) => {
+    const approvals = new Approvals();
+    t.after(() => approvals.close());
+    const settled = [];
+    approvals.on('settled', (s) => settled.push(s.by));
+    const caller = new AbortController();
+    const asked = nextAsk(approvals);
+    const answer = approvals.ask(intent(0.3), verdict, { signal: caller.signal });
+    const { id } = await asked;
+    caller.abort();
+    assert.equal(await Promise.race([answer, new Promise((resolve) => setTimeout(resolve, 500, 'still waiting'))]), false);
+    assert.deepEqual(settled, ['cancelled']);
+    assert.deepEqual(approvals.pending, []);
+    assert.equal(approvals.decide(id, true), false);
+  });
+
   test('ids are random, so a page cannot guess one it was not shown', async () => {
     const approvals = new Approvals();
     const ids = [];
