@@ -65,7 +65,7 @@ const CANCELLED = { code: 'cancelled', message: 'the agent stopped waiting, so n
  * Sits between the agent and its wallets. The agent asks the guard to pay; the guard checks the
  * policy, asks a human when the policy says so, pays through the matching rail and records the
  * outcome. Emits 'entry' for every recorded decision (the dashboard listens to it) and 'settled'
- * when a paywall reports how a paid entry settled.
+ * when a paywall reports how a paid entry settled. A listener that throws only gets a warning.
  */
 export class Guard extends EventEmitter {
   /**
@@ -152,10 +152,9 @@ export class Guard extends EventEmitter {
       this.#record({ ...base, status: 'failed', error });
       throw new Error(error);
     }
+    let receipt;
     try {
-      const receipt = await rail.pay(intent);
-      this.#record({ ...base, status: 'paid', receipt });
-      return { receipt };
+      receipt = await rail.pay(intent);
     } catch (err) {
       if (err instanceof PaymentPending) {
         this.#record({ ...base, status: 'unconfirmed', error: err.message, receipt: { network: intent.network, ...err.receipt } });
@@ -164,6 +163,9 @@ export class Guard extends EventEmitter {
       }
       throw err;
     }
+    // Outside the try: the money has moved, so nothing from here on may record it as failed.
+    this.#record({ ...base, status: 'paid', receipt });
+    return { receipt };
   }
 
   /**
@@ -176,7 +178,7 @@ export class Guard extends EventEmitter {
     const entry = this.ledger.entries.findLast((e) => e.receipt === receipt);
     if (!entry) return;
     this.ledger.settle(entry, settlement, this.now());
-    this.emit('settled', entry);
+    this.#notify('settled', entry);
   }
 
   /** @returns {never} */
@@ -186,6 +188,20 @@ export class Guard extends EventEmitter {
   }
 
   #record(entry) {
-    this.emit('entry', this.ledger.record(entry));
+    this.#notify('entry', this.ledger.record(entry));
+  }
+
+  /**
+   * Calls each listener in turn. One that throws is reported as a warning and never reaches the
+   * payer: by then the money may have moved, and the payer would take it for a failed payment.
+   */
+  #notify(event, entry) {
+    for (const listener of this.rawListeners(event)) {
+      try {
+        listener.call(this, entry);
+      } catch (err) {
+        process.emitWarning(`a listener of '${event}' threw: ${err?.message ?? err}`, 'SpendGuardWarning');
+      }
+    }
   }
 }

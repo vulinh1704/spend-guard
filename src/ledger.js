@@ -38,16 +38,21 @@ export class Ledger {
     // Lines this ledger wrote carry its id, so that reading the file back skips them.
     this.id = randomUUID();
     this.read = { bytes: 0, lines: 0 };
+    /** Lines the file could not take yet, oldest first. */
+    this.unwritten = [];
   }
 
   /**
+   * Counts the entry here, then appends it to the file. A file that can't take it does not undo it:
+   * see #write.
+   *
    * @param {Omit<Entry, 'id'>} entry
    * @returns {Entry}
    */
   record(entry) {
     const recorded = { id: randomUUID(), ...entry };
     this.entries.push(recorded);
-    if (this.file) appendFileSync(this.file, JSON.stringify({ ...recorded, ledger: this.id }, bigintAsString) + '\n');
+    this.#write({ ...recorded, ledger: this.id });
     return recorded;
   }
 
@@ -61,12 +66,14 @@ export class Ledger {
    */
   settle(entry, settlement, at = Date.now()) {
     applySettlement(entry, settlement, settlement.success ? settlement.transaction : undefined);
-    if (this.file) appendFileSync(this.file, JSON.stringify({ at, status: 'settled', entry: entry.id, txid: entry.receipt.txid, settlement, ledger: this.id }, bigintAsString) + '\n');
+    this.#write({ at, status: 'settled', entry: entry.id, txid: entry.receipt.txid, settlement, ledger: this.id });
   }
 
   /**
    * Runs `fn` as the only process deciding against the file, after reading what the others have
    * written to it: two of them must not both pass the budget check before either has recorded.
+   * Nothing is decided while this ledger has lines the file has not taken: the processes sharing
+   * it would decide without them.
    *
    * @template T
    * @param {() => Promise<T>} fn
@@ -77,10 +84,39 @@ export class Ledger {
     const release = await lock(`${this.file}.lock`);
     try {
       this.sync();
+      this.#flush();
       return await fn();
     } finally {
       release();
     }
+  }
+
+  /**
+   * Appends `line` to the file, after any the file could not take before. A line it can't take (a
+   * full disk, a read-only file) waits for the next try and gets a warning, never a throw: by now
+   * the money may have moved, and its entry counts here all the same. exclusive() decides nothing
+   * more until the file has it.
+   *
+   * @param {object} line
+   */
+  #write(line) {
+    if (!this.file) return;
+    this.unwritten.push(JSON.stringify(line, bigintAsString) + '\n');
+    try {
+      this.#flush();
+    } catch (err) {
+      process.emitWarning(`${err.message} (${err.cause.message})`, 'SpendGuardWarning');
+    }
+  }
+
+  #flush() {
+    if (!this.unwritten.length) return;
+    try {
+      appendFileSync(this.file, this.unwritten.join(''));
+    } catch (err) {
+      throw new Error(`the ledger ${this.file} can't be written, so no payment is decided until it can: the processes sharing it would not count ${this.unwritten.length} of this one's entries`, { cause: err });
+    }
+    this.unwritten = [];
   }
 
   /** Reads the entries other processes appended to the file since the last read. */
