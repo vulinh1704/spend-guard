@@ -19,7 +19,9 @@ Environment:
   SPEND_GUARD_LEDGER            decisions file, read back on start (default ~/.spend-guard/ledger.jsonl; off)
   SPEND_GUARD_DASHBOARD_PORT    dashboard port on 127.0.0.1 (default 4400; 0 picks a free one; off: no
                                 dashboard, and payments that need your approval are declined)
-  SPEND_GUARD_APPROVAL_TIMEOUT  seconds a payment waits for your answer before it is declined (default 120)
+  SPEND_GUARD_APPROVAL_TIMEOUT  seconds a payment waits for your answer before it is declined (default 55:
+                                many MCP clients give up on a tool call after 60s, and a call the client
+                                gives up on is withdrawn, so raise both together)
   NEAR_ACCOUNT_ID, NEAR_PRIVATE_KEY, ARC_PRIVATE_KEY   rail keys; testnet keys only
 
 For example, in Claude Code:
@@ -55,7 +57,7 @@ async function main([cmd, ...rest]) {
 }
 
 async function mcp(env) {
-  const timeout = Number(env.SPEND_GUARD_APPROVAL_TIMEOUT ?? 120);
+  const timeout = Number(env.SPEND_GUARD_APPROVAL_TIMEOUT ?? 55);
   if (!(timeout > 0)) throw new Error('SPEND_GUARD_APPROVAL_TIMEOUT must be a number of seconds above 0');
   const port = env.SPEND_GUARD_DASHBOARD_PORT ?? '4400';
   const approvals = port === 'off' ? null : new Approvals({ timeoutMs: timeout * 1000 });

@@ -18,9 +18,10 @@
 /**
  * fetch() that pays 402 paywalls through `guard`. Other responses pass through untouched.
  *
- * @param {import('./guard.js').Guard} guard
+ * @param {Pick<import('./guard.js').Guard, 'networks'|'pay'>} guard
  * @param {string} url
- * @param {RequestInit} [init]
+ * @param {RequestInit} [init]  Its `signal` also reaches the guard: a payment not made by the time
+ *   it aborts is not made.
  * @param {{fetch?: typeof globalThis.fetch}} [options]
  */
 export async function payingFetch(guard, url, init = {}, { fetch = globalThis.fetch } = {}) {
@@ -42,7 +43,7 @@ export async function payingFetch(guard, url, init = {}, { fetch = globalThis.fe
     amount: BigInt(requirement.maxAmountRequired),
     payTo: requirement.payTo,
     description: requirement.description,
-  });
+  }, { signal: init.signal });
 
   const payment = { x402Version: body.x402Version ?? 1, scheme: requirement.scheme, network: requirement.network, payload: receipt.proof };
   return fetch(url, { ...init, headers: { ...init.headers, 'X-PAYMENT': encodePayment(payment) } });

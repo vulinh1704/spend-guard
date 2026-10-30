@@ -84,7 +84,7 @@ describe('mcp tools', () => {
     const { run, rail } = setUp(host, { approvals, dashboardUrl: 'http://127.0.0.1:4400' });
     approvals.once('asked', (ask) => setImmediate(() => approvals.decide(ask.id, true)));
     const progress = [];
-    const result = await run('pay_and_fetch', { url: `${base}/report` }, (m) => progress.push(m));
+    const result = await run('pay_and_fetch', { url: `${base}/report` }, { progress: (m) => progress.push(m) });
     assert.match(progress[0], /^Waiting for the user to approve \$0\.30 to news\.paywall\.testnet at http:\/\/127\.0\.0\.1:4400$/);
     assert.match(textOf(result), /Paid \$0\.30 to news\.paywall\.testnet .*\(approved by the user\)\./);
     assert.equal(rail.paid.length, 1);
@@ -277,6 +277,7 @@ function harness(run, dashboardUrl) {
   return {
     send: (m) => input.write(`${typeof m === 'string' ? m : JSON.stringify({ jsonrpc: '2.0', ...m })}\n`),
     next: () => (queue.length ? Promise.resolve(queue.shift()) : new Promise((r) => waiters.push(r))),
+    unread: () => queue,
     end: async () => {
       input.end();
       await done;
@@ -286,7 +287,7 @@ function harness(run, dashboardUrl) {
 
 describe('mcp protocol', () => {
   test('initialize, list, call with progress, and errors', async () => {
-    const h = harness(async (name, args, progress) => {
+    const h = harness(async (name, args, { progress }) => {
       progress('Waiting for the user');
       return { content: [{ type: 'text', text: `${name} ${JSON.stringify(args)}` }] };
     }, 'http://127.0.0.1:4400');
@@ -319,6 +320,35 @@ describe('mcp protocol', () => {
     h.send('{not json');
     assert.equal((await h.next()).error.code, -32700);
     await h.end();
+  });
+
+  test('a cancelled call is stopped and gets no answer', async () => {
+    let signal;
+    const h = harness(async (name, args, context) => {
+      signal = context.signal;
+      await new Promise((resolve) => signal.addEventListener('abort', resolve));
+      return { content: [{ type: 'text', text: 'too late' }] };
+    });
+    h.send({ id: 1, method: 'tools/call', params: { name: 'pay_and_fetch', arguments: { url: 'http://x.test/' } } });
+    h.send({ method: 'notifications/cancelled', params: { requestId: 1, reason: 'Request timed out' } });
+    h.send({ id: 2, method: 'ping' });
+    assert.deepEqual(await h.next(), { jsonrpc: '2.0', id: 2, result: {} });
+    assert.equal(signal.aborted, true);
+    assert.match(signal.reason.message, /cancelled by the client: Request timed out/);
+    await h.end();
+    assert.deepEqual(h.unread(), [], 'no result for the cancelled call');
+  });
+
+  test('when the client goes away, calls still running are stopped', { timeout: 2000 }, async () => {
+    let stopped = false;
+    const h = harness(async (name, args, { signal }) => {
+      await new Promise((resolve) => signal.addEventListener('abort', resolve));
+      stopped = true;
+      return { content: [{ type: 'text', text: 'too late' }] };
+    });
+    h.send({ id: 1, method: 'tools/call', params: { name: 'pay_and_fetch', arguments: { url: 'http://x.test/' } } });
+    await h.end();
+    assert.equal(stopped, true);
   });
 
   test('a crashing tool is a tool error, not a dead server', async () => {
@@ -386,26 +416,62 @@ describe('spend-guard mcp, end to end with the official SDK client', () => {
     assert.match(result.content[0].text, /Paid \$0\.01 to weather\.paywall\.testnet/);
   });
 
+  /** The dashboard's event stream, as the page reads it. */
+  async function dashboardEvents() {
+    const reader = (await fetch(`${dashboardUrl}/events`)).body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    return {
+      /** Reads until `re` matches what arrived; returns the match and reads on from after it. */
+      async until(re) {
+        let m;
+        while (!(m = buffer.match(re))) buffer += decoder.decode((await reader.read()).value, { stream: true });
+        buffer = buffer.slice(m.index + m[0].length);
+        return m;
+      },
+      close: () => reader.cancel(),
+    };
+  }
+
+  /** What the page posts when the user presses Approve or Deny. */
+  const answer = (id, approve) => fetch(`${dashboardUrl}/approvals/${id}`, { method: 'POST', headers: { origin: dashboardUrl, 'content-type': 'application/json' }, body: JSON.stringify({ approve }) });
+  const spentToday = async () => (await client.callTool({ name: 'spending_status', arguments: {} })).content[0].text.match(/^Spent today \(UTC\): (\$[\d.]+)/)[1];
+
   test('a flagged payment goes out only after the user approves it on the dashboard', async () => {
     const progress = [];
     const calling = client.callTool({ name: 'pay_and_fetch', arguments: { url: `${base}/report` } }, undefined, { onprogress: (p) => progress.push(p.message) });
 
     // The user's side: the page's event stream shows the ask, and the page posts the answer.
-    const events = await fetch(`${dashboardUrl}/events`);
-    const reader = events.body.getReader();
-    let buffer = '';
-    while (!/event: ask\ndata: .*\n\n/.test(buffer)) buffer += new TextDecoder().decode((await reader.read()).value);
-    const ask = JSON.parse(buffer.match(/event: ask\ndata: (.*)\n\n/)[1]);
+    const events = await dashboardEvents();
+    const ask = JSON.parse((await events.until(/event: ask\ndata: (.*)\n\n/))[1]);
     assert.equal(ask.usd, '$0.30');
-    const answer = await fetch(`${dashboardUrl}/approvals/${ask.id}`, { method: 'POST', headers: { origin: dashboardUrl, 'content-type': 'application/json' }, body: JSON.stringify({ approve: true }) });
-    assert.equal(answer.status, 200);
-    await reader.cancel();
+    assert.equal((await answer(ask.id, true)).status, 200);
+    await events.close();
 
     const result = await calling;
     assert.match(result.content[0].text, /Paid \$0\.30 to news\.paywall\.testnet .*\(approved by the user\)/);
     assert.match(progress[0], /^Waiting for the user to approve \$0\.30/);
+    assert.equal(await spentToday(), '$0.31');
+  });
 
-    const status = await client.callTool({ name: 'spending_status', arguments: {} });
-    assert.match(status.content[0].text, /^Spent today \(UTC\): \$0\.31 of the \$1\.00 daily budget/);
+  test('a call the client gives up on is withdrawn: an approval after that pays nothing, and other payments go on meanwhile', async () => {
+    const spent = await spentToday();
+    const events = await dashboardEvents();
+    // A client that does not wait as long as the user may take (the SDK's default is 60s).
+    const calling = assert.rejects(client.callTool({ name: 'pay_and_fetch', arguments: { url: `${base}/report` } }, undefined, { onprogress: () => {}, timeout: 1500 }), /Request timed out/);
+    const ask = JSON.parse((await events.until(/event: ask\ndata: (.*)\n\n/))[1]);
+
+    const weather = await client.callTool({ name: 'pay_and_fetch', arguments: { url: `${base}/weather` } }, undefined, { timeout: 1000 });
+    assert.match(weather.content[0].text, /Paid \$0\.01 to weather\.paywall\.testnet/, 'an allowed payment does not wait behind the ask');
+
+    await calling;
+    const settled = JSON.parse((await events.until(/event: settled\ndata: (.*)\n\n/))[1]);
+    assert.deepEqual(settled, { id: ask.id, approved: false, by: 'cancelled' });
+    assert.equal((await answer(ask.id, true)).status, 404, 'the page can no longer approve it');
+    await events.close();
+
+    const status = (await client.callTool({ name: 'spending_status', arguments: { limit: 1 } })).content[0].text;
+    assert.match(status, /- \S+ declined \$0\.30 http:\/\/[^ ]+\/report to news\.paywall\.testnet: .*the agent stopped waiting, so nothing was paid/);
+    assert.equal(await spentToday(), `$${(Number(spent.slice(1)) + 0.01).toFixed(2)}`);
   });
 });
