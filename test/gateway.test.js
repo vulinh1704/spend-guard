@@ -4,6 +4,7 @@
  */
 import assert from 'node:assert/strict';
 import { after, before, describe, test } from 'node:test';
+import { setTimeout as sleep } from 'node:timers/promises';
 import { formatUnits } from 'viem';
 import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts';
 import { createGatewaySeller } from '../demo/gateway-seller.js';
@@ -17,16 +18,27 @@ const AGENT = privateKeyToAccount(KEY).address;
 const address = () => privateKeyToAccount(generatePrivateKey()).address;
 const PAYEES = { weather: address(), news: address(), quotes: address(), maps: address(), thief: address() };
 const EURC = '0x89B50855Aa3bE2F677cD6303Cec089B5F319D72a';
-const WEEK = 7 * 24 * 60 * 60;
+const DAY = 24 * 60 * 60;
+const WEEK = 7 * DAY;
 
-/** Stands in for GatewayClient: a Gateway balance and a transfer search, no network. */
+/**
+ * Stands in for GatewayClient, no network. Like Gateway, it lists a payment and takes it off
+ * `available` only once the payee settles it (`settle` plays Circle's /settle).
+ */
 function fakeClient(available = 1_000_000n) {
+  const transfers = new Map();
   return {
     searches: [],
     getBalances: async () => ({ wallet: { balance: 0n, formatted: '0' }, gateway: { available, formattedAvailable: formatUnits(available, 6) } }),
     searchTransfers: async function (query) {
       this.searches.push(query);
-      return { transfers: [{ id: 'f1b9…', status: 'completed', nonce: query.nonce, txHash: `0x${'cd'.repeat(32)}` }] };
+      return { transfers: transfers.has(query.nonce) ? [transfers.get(query.nonce)] : [] };
+    },
+    settle: async ({ authorization: a }) => {
+      if (available < BigInt(a.value)) return { success: false, errorReason: 'insufficient_balance' };
+      available -= BigInt(a.value);
+      transfers.set(a.nonce, { id: crypto.randomUUID(), status: 'received', nonce: a.nonce });
+      return { success: true, transaction: crypto.randomUUID(), payer: a.from, network: 'eip155:5042002' };
     },
   };
 }
@@ -98,13 +110,30 @@ describe('Gateway rail', () => {
     assert.equal(rail.signed.length, 0);
   });
 
+  test('counts what it signed as spent until Gateway has settled it or it has expired', async () => {
+    const client = fakeClient(20_000n);
+    const rail = railWith(client);
+    const first = await rail.pay(intentFor(offer));
+    await rail.pay(intentFor(offer));
+    // Gateway's balance still reads 0.02: a payee holding signatures unsettled doesn't lower it.
+    await assert.rejects(rail.pay(intentFor(offer)), /balance 0.02 USDC, 0.02 of it signed for payments not settled yet, is too low/);
+
+    await client.settle(first.proof);
+    await assert.rejects(rail.pay(intentFor(offer)), /balance 0.01 USDC, 0.01 of it signed/, 'the settled one is off the balance, not held twice');
+
+    rail.now = () => Date.now() + 8 * DAY * 1000;
+    await rail.pay(intentFor(offer));
+    assert.equal(rail.signed.length, 3, 'an expired signature can no longer be settled, so it is no longer held');
+  });
+
   test('looks a payment up at Gateway by the nonce in its receipt', async () => {
     const client = fakeClient();
     const rail = railWith(client);
-    const { txid } = await rail.pay(intentFor(offer));
-    const transfer = await rail.status(txid);
-    assert.equal(transfer.status, 'completed');
-    assert.deepEqual(client.searches, [{ from: AGENT, nonce: txid }]);
+    const { txid, proof } = await rail.pay(intentFor(offer));
+    assert.equal(await rail.status(txid), null, 'not settled yet');
+    await client.settle(proof);
+    assert.equal((await rail.status(txid)).status, 'received');
+    assert.deepEqual(client.searches, [{ from: AGENT, nonce: txid }, { from: AGENT, nonce: txid }]);
   });
 });
 
@@ -203,6 +232,20 @@ describe('x402 v2 paywalls paid through Circle Gateway', () => {
     assert.equal(decodePayment(res.headers.get('payment-response')).success, false);
     // The authorization is out there for a week, so the budget keeps counting it.
     assert.deepEqual(guard.ledger.entries.map((e) => e.status), ['paid']);
+  });
+
+  test('parallel calls never sign more than the Gateway balance covers', async () => {
+    const client = fakeClient(20_000n); // /weather ($0.01) or /news ($0.02), not both
+    const rail = railWith(client);
+    const guard = guardFor(rail);
+    // Circle is a round trip away, so the first payment is still unsettled when the second is checked.
+    settleResult = async (payment) => (await sleep(20), client.settle(payment.payload));
+    const results = await Promise.allSettled([payingFetch(guard, `${base}/weather`), payingFetch(guard, `${base}/news`)]);
+
+    assert.equal(rail.signed.length, 1);
+    assert.deepEqual(results.filter((r) => r.status === 'fulfilled').map((r) => r.value.status), [200]);
+    assert.match(results.find((r) => r.status === 'rejected')?.reason.message, /signed for payments not settled yet/);
+    assert.deepEqual(guard.ledger.entries.map((e) => e.status).sort(), ['failed', 'paid']);
   });
 
   test('a paywall that answers 402 again after being paid gets no second signature', async () => {
