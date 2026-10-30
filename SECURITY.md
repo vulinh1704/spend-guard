@@ -22,13 +22,15 @@ I aim to reply within a week. Once a fix is released, the advisory will be publi
 ## In scope
 
 - A payment that goes out although the policy should refuse it, or that skips the human approval it needs.
-- A way to make `checkNearPayment` or `checkArcPayment` accept a payment that did not happen, or that paid someone else or paid less.
+- A way to make `checkNearPayment`, `checkArcPayment`, `verifyAuthorization` or `checkGatewayAuthorization` accept a payment that did not happen, or that paid someone else or paid less.
+- A rail that signs for a payee, amount, chain or token other than the one the guard approved.
+- A way for anyone but the person at the dashboard to approve a payment, or for an MCP client to get a payment made after it cancelled the call.
 - A key, or a key-derived secret, leaking through the guard, a rail, the ledger or the dashboard.
 
 ## Out of scope
 
 - The limits and known gaps listed in [docs/threat-model.md](docs/threat-model.md). Ideas for closing them are welcome as normal issues.
-- Bugs in dependencies (`viem`, `near-api-js`). Please report those upstream.
+- Bugs in dependencies (`viem`, `near-api-js`, Circle's SDKs, the MCP SDK). Please report those upstream.
 - The demo paywall's endpoints that turn bad on purpose.
 
 ## Supported versions

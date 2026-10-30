@@ -60,8 +60,8 @@ Only you can do steps 1 to 3: they create an account and secrets. Edit `.env` in
 ## Use it in code
 
 ```js
-import { Guard, payingFetch } from 'spend-guard';
-import { circleWalletRailFromEnv } from 'spend-guard/src/rails/circle-wallet.js';
+import { Guard, payingFetch } from '@vulinh1704/spend-guard';
+import { circleWalletRailFromEnv } from '@vulinh1704/spend-guard/rails/circle-wallet';
 
 // Checks with Circle that CIRCLE_WALLET_ID is a live ARC-TESTNET wallet (and matches CIRCLE_WALLET_ADDRESS).
 const rail = await circleWalletRailFromEnv(process.env); // { mode: 'transfer' | 'authorization' } to force one way
