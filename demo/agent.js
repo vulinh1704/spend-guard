@@ -4,6 +4,7 @@
  *
  *   node demo/agent.js                 # mock payments, offline
  *   node demo/agent.js --near          # real NEAR testnet transfers (needs .env, see scripts/)
+ *   node demo/agent.js --arc           # real USDC transfers on Circle's Arc testnet (needs .env)
  *   node demo/agent.js --dashboard     # also serves the live page on DASHBOARD_PORT (default 4400),
  *                                      # paces the calls for watching, and stays up until Ctrl+C
  */
@@ -13,6 +14,7 @@ import { createDashboard } from './dashboard.js';
 import { createPaidApi, PAYEES } from './paid-api.js';
 import { Guard, GuardRefused } from '../src/guard.js';
 import { formatUsd } from '../src/money.js';
+import { ArcRail, checkArcPayment } from '../src/rails/arc.js';
 import { MockRail } from '../src/rails/mock.js';
 import { checkNearPayment, NearRail } from '../src/rails/near.js';
 import { payingFetch } from '../src/x402.js';
@@ -25,26 +27,39 @@ const red = color(31);
 const yellow = color(33);
 const dim = color(2);
 
-const near = process.argv.includes('--near');
-let rail;
-let paywall;
-let payees = PAYEES;
-if (near) {
-  if (existsSync('.env')) process.loadEnvFile('.env');
+/** The rail, the paywall it pays, and how to show its transactions, per chain. */
+function setUp(mode) {
+  if (mode !== 'mock' && existsSync('.env')) process.loadEnvFile('.env');
   const env = process.env;
-  rail = new NearRail({ accountId: env.NEAR_ACCOUNT_ID, privateKey: env.NEAR_PRIVATE_KEY, network: 'near-testnet' });
-  payees = { weather: env.PAYEE_WEATHER, news: env.PAYEE_NEWS, quotes: env.PAYEE_QUOTES, maps: env.PAYEE_MAPS, thief: env.PAYEE_THIEF };
-  paywall = createPaidApi({ network: 'near-testnet', asset: 'near', payees, verify: (payload, expected) => checkNearPayment(rail.provider, payload, expected) });
-} else {
-  rail = new MockRail('near-testnet');
-  paywall = createPaidApi();
+  if (mode === 'near') {
+    const rail = new NearRail({ accountId: env.NEAR_ACCOUNT_ID, privateKey: env.NEAR_PRIVATE_KEY, network: 'near-testnet' });
+    const payees = { weather: env.PAYEE_WEATHER, news: env.PAYEE_NEWS, quotes: env.PAYEE_QUOTES, maps: env.PAYEE_MAPS, thief: env.PAYEE_THIEF };
+    return {
+      rail, payees, label: `${rail.accountId} · NEAR testnet`,
+      paywall: createPaidApi({ network: 'near-testnet', asset: 'near', payees, verify: (p, e) => checkNearPayment(rail.provider, p, e) }),
+      explorer: (txid) => `https://testnet.nearblocks.io/txns/${txid}`,
+    };
+  }
+  if (mode === 'arc') {
+    const rail = new ArcRail({ privateKey: env.ARC_PRIVATE_KEY });
+    const payees = { weather: env.ARC_PAYEE_WEATHER, news: env.ARC_PAYEE_NEWS, quotes: env.ARC_PAYEE_QUOTES, maps: env.ARC_PAYEE_MAPS, thief: env.ARC_PAYEE_THIEF };
+    return {
+      rail, payees, label: `${rail.address} · Arc testnet (USDC)`,
+      paywall: createPaidApi({ network: 'arc-testnet', asset: 'usdc', payees, verify: (p, e) => checkArcPayment(rail.publicClient, p, e) }),
+      explorer: (txid) => `https://testnet.arcscan.app/tx/${txid}`,
+    };
+  }
+  return { rail: new MockRail('near-testnet'), payees: PAYEES, label: 'mock payments · offline', paywall: createPaidApi(), explorer: undefined };
 }
+
+const mode = process.argv.includes('--near') ? 'near' : process.argv.includes('--arc') ? 'arc' : 'mock';
+const { rail, payees, label, paywall, explorer } = setUp(mode);
 await new Promise((resolve) => paywall.listen(0, '127.0.0.1', resolve));
 const base = `http://127.0.0.1:${paywall.address().port}`;
 
 const guard = new Guard({
   policy: {
-    networks: ['near-testnet'],
+    networks: [rail.network],
     dailyUsd: 1,
     perPaymentUsd: 0.5,
     askAboveUsd: 0.25,
@@ -62,22 +77,19 @@ const withDashboard = process.argv.includes('--dashboard');
 let dashboard;
 if (withDashboard) {
   const port = Number(process.env.DASHBOARD_PORT ?? 4400);
-  dashboard = createDashboard(guard, {
-    account: near ? `${rail.accountId} · NEAR testnet` : 'mock payments · offline',
-    explorer: near ? (txid) => `https://testnet.nearblocks.io/txns/${txid}` : undefined,
-  });
+  dashboard = createDashboard(guard, { account: label, explorer });
   await new Promise((resolve) => dashboard.listen(port, resolve));
   console.log(`dashboard on http://localhost:${port}; starting in 3s`);
   await sleep(3000);
 }
 
-if (near) console.log(dim(`agent ${rail.accountId} paying on NEAR testnet\n`));
+if (mode !== 'mock') console.log(dim(`agent ${label}\n`));
 for (const name of PLAN) {
   if (withDashboard) await sleep(1200);
   try {
     const res = await payingFetch(guard, `${base}/${name}`);
     const paid = guard.ledger.entries.at(-1);
-    const tx = near ? dim(` https://testnet.nearblocks.io/txns/${paid.receipt.txid}`) : '';
+    const tx = explorer ? dim(` ${explorer(paid.receipt.txid)}`) : '';
     console.log(`${green('✓ paid')} ${formatUsd(paid.usd).padEnd(7)} /${name.padEnd(8)} ${dim(JSON.stringify(await res.json()))}${tx}`);
   } catch (err) {
     if (!(err instanceof GuardRefused)) throw err;
