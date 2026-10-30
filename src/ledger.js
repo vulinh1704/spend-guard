@@ -7,14 +7,19 @@ import { priceKey } from './policy.js';
  * @typedef {object} Entry
  * @property {string} id  So that later lines about the entry, such as its settlement, can name it.
  * @property {number} at  ms since epoch
- * @property {'paid'|'unconfirmed'|'denied'|'declined'|'failed'} status  `unconfirmed`: sent, but
- *   the rail could not confirm it went through. `failed`: it never left.
+ * @property {'paid'|'unconfirmed'|'denied'|'declined'|'failed'} status  `unconfirmed`: the money
+ *   may have left but the rail can't tell (PaymentPending), so it counts as spent. `failed`: it
+ *   never left.
  * @property {import('./policy.js').Intent} intent
  * @property {import('./policy.js').Reason[]} reasons
  * @property {bigint} usd  micro-dollars
- * @property {{network: string, txid: string, proof?: object}} [receipt]  An unconfirmed payment has its txid only.
+ * @property {{network: string, txid?: string, proof?: object, settlement?: object}} [receipt]  An unconfirmed
+ *   payment has only what the rail knew, such as its txid.
  * @property {string} [error]
  */
+
+/** Entries whose money left, or may have: budgets and usual prices count both. */
+const SPENT = new Set(['paid', 'unconfirmed']);
 
 /** Every decision the guard made, paid or not. Budgets and usual prices are read from here. */
 export class Ledger {
@@ -128,14 +133,14 @@ export class Ledger {
   spentToday(now) {
     const day = utcDay(now);
     let total = 0n;
-    for (const e of this.entries) if ((e.status === 'paid' || e.status === 'unconfirmed') && utcDay(e.at) === day) total += e.usd;
+    for (const e of this.entries) if (SPENT.has(e.status) && utcDay(e.at) === day) total += e.usd;
     return total;
   }
 
   /** The last `limit` prices paid for this endpoint, in micro-dollars: the baseline for spotting a spike. */
   recentPrices(intent, limit = 20) {
     const key = priceKey(intent);
-    return this.entries.filter((e) => e.status === 'paid' && priceKey(e.intent) === key).slice(-limit).map((e) => e.usd);
+    return this.entries.filter((e) => SPENT.has(e.status) && priceKey(e.intent) === key).slice(-limit).map((e) => e.usd);
   }
 }
 
