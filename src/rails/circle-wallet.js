@@ -213,6 +213,9 @@ export async function circleWalletRailFromEnv(env = process.env, { client, ...op
   if (wallet.state !== 'LIVE') throw new Error(`Circle wallet ${wallet.id} is ${wallet.state}, not LIVE`);
   if (env.CIRCLE_WALLET_ADDRESS && !isAddressEqual(env.CIRCLE_WALLET_ADDRESS, wallet.address)) throw new Error(`CIRCLE_WALLET_ADDRESS is ${env.CIRCLE_WALLET_ADDRESS} but Circle says wallet ${wallet.id} is ${wallet.address}`);
   // USDC checks a contract wallet's signature with ERC-1271, which the rail's own check can't follow.
-  if (options.mode === 'authorization' && wallet.accountType !== 'EOA') throw new Error(`Circle wallet ${wallet.id} is ${wallet.accountType}; signing authorizations needs an EOA`);
+  // 'auto' signs too, whenever an x402 offer asks for it.
+  if ((options.mode ?? 'auto') !== 'transfer' && wallet.accountType !== 'EOA') {
+    throw new Error(`Circle wallet ${wallet.id} is ${wallet.accountType}; signing authorizations needs an EOA, so use mode 'transfer' for this wallet`);
+  }
   return new CircleWalletRail({ client, walletId: wallet.id, address: wallet.address, ...options });
 }
