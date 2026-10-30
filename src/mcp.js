@@ -327,14 +327,15 @@ async function readBody(res, type) {
  * The guard the server runs, from the environment:
  *   SPEND_GUARD_POLICY        policy JSON file (the Policy in policy.js). Default: no known services,
  *                             so every payment waits for the user.
- *   SPEND_GUARD_RAILS         comma list of mock, near, arc. Default mock (pays nothing).
+ *   SPEND_GUARD_RAILS         comma list of mock, near, arc, gateway. Default mock (pays nothing).
  *   SPEND_GUARD_MOCK_NETWORK  the network the mock rail pretends to pay on. Default near-testnet,
  *                             as the demo paywall (node demo/paid-api.js) asks.
  *   SPEND_GUARD_LEDGER        JSON-lines file of every decision, read back on start so the daily
  *                             budget survives a restart, and shared, so servers started by several
  *                             clients share one budget. Default ~/.spend-guard/ledger.jsonl; off
  *                             keeps it in memory, for this server alone.
- *   NEAR_ACCOUNT_ID, NEAR_PRIVATE_KEY  for near; ARC_PRIVATE_KEY for arc (testnet keys only).
+ *   NEAR_ACCOUNT_ID, NEAR_PRIVATE_KEY  for near; ARC_PRIVATE_KEY for arc and gateway (testnet keys
+ *                             only; gateway pays from a Gateway deposit, see scripts/gateway-deposit.js).
  *
  * @param {NodeJS.ProcessEnv} [env]
  * @param {{approve?: ConstructorParameters<typeof Guard>[0]['approve']}} [options]
@@ -350,8 +351,11 @@ export async function guardFromEnv(env = process.env, { approve } = {}) {
     } else if (name === 'arc') {
       const { ArcRail } = await import('./rails/arc.js');
       rails.push(new ArcRail({ privateKey: required(env, 'ARC_PRIVATE_KEY') }));
+    } else if (name === 'gateway') {
+      const { GatewayRail } = await import('./rails/gateway.js');
+      rails.push(new GatewayRail({ privateKey: required(env, 'ARC_PRIVATE_KEY') }));
     } else {
-      throw new Error(`unknown rail "${name}" in SPEND_GUARD_RAILS (use mock, near or arc)`);
+      throw new Error(`unknown rail "${name}" in SPEND_GUARD_RAILS (use mock, near, arc or gateway)`);
     }
   }
   const policy = env.SPEND_GUARD_POLICY ? readPolicy(env.SPEND_GUARD_POLICY) : {};

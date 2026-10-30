@@ -14,7 +14,8 @@ wait for you on the dashboard (http://127.0.0.1:4400) with Approve and Deny butt
 
 Environment:
   SPEND_GUARD_POLICY            policy JSON file (default: no known services, so every payment asks you)
-  SPEND_GUARD_RAILS             mock (default, pays nothing), near, arc, or a comma list
+  SPEND_GUARD_RAILS             mock (default, pays nothing), near, arc, gateway (Circle Gateway
+                                nanopayments from a deposit), or a comma list
   SPEND_GUARD_MOCK_NETWORK      network the mock rail pretends to pay on (default near-testnet)
   SPEND_GUARD_LEDGER            decisions file, read back on start; servers on one file share one budget
                                 (default ~/.spend-guard/ledger.jsonl; off keeps it in memory)
@@ -23,7 +24,8 @@ Environment:
   SPEND_GUARD_APPROVAL_TIMEOUT  seconds a payment waits for your answer before it is declined (default 55:
                                 many MCP clients give up on a tool call after 60s, and a call the client
                                 gives up on is withdrawn, so raise both together)
-  NEAR_ACCOUNT_ID, NEAR_PRIVATE_KEY, ARC_PRIVATE_KEY   rail keys; testnet keys only
+  NEAR_ACCOUNT_ID, NEAR_PRIVATE_KEY, ARC_PRIVATE_KEY   rail keys (arc and gateway share the Arc key);
+                                testnet keys only
 
 For example, in Claude Code:
   claude mcp add spend-guard --env SPEND_GUARD_POLICY=/abs/path/policy.json -- node /abs/path/spend-guard/bin/spend-guard.js mcp
@@ -68,7 +70,10 @@ async function mcp(env) {
   let dashboardUrl;
   if (approvals) {
     const account = [...guard.rails.values()].map((r) => (r.accountId ?? r.address ? `${r.accountId ?? r.address} · ${r.network}` : `${r.network} · mock`)).join(' + ');
-    dashboard = createDashboard(guard, { approvals, account, explorer: (tx, network) => EXPLORERS[network]?.(tx) ?? null });
+    const explorers = { ...EXPLORERS };
+    // Loaded only when used: Gateway's page for a payment, by its authorization nonce.
+    if (guard.rails.has('arc-testnet-gateway')) explorers['arc-testnet-gateway'] = (await import('../src/rails/gateway.js')).gatewayTransferUrl;
+    dashboard = createDashboard(guard, { approvals, account, explorer: (tx, network) => explorers[network]?.(tx) ?? null });
     dashboardUrl = `http://127.0.0.1:${await listen(dashboard, Number(port))}`;
     console.error(`spend-guard: approve payments on ${dashboardUrl}`);
   }

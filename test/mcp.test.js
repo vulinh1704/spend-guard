@@ -353,6 +353,11 @@ describe('mcp configuration', () => {
 
     await assert.rejects(guardFromEnv({ SPEND_GUARD_LEDGER: 'off', SPEND_GUARD_RAILS: 'mock,bank' }), /unknown rail "bank"/);
     await assert.rejects(guardFromEnv({ SPEND_GUARD_LEDGER: 'off', SPEND_GUARD_RAILS: 'arc' }), /ARC_PRIVATE_KEY is not set/);
+    await assert.rejects(guardFromEnv({ SPEND_GUARD_LEDGER: 'off', SPEND_GUARD_RAILS: 'gateway' }), /ARC_PRIVATE_KEY is not set/);
+    // Arc and Circle Gateway side by side: one key, two networks the policy can allow separately.
+    const both = await guardFromEnv({ SPEND_GUARD_LEDGER: 'off', SPEND_GUARD_RAILS: 'arc,gateway', ARC_PRIVATE_KEY: `0x${'11'.repeat(32)}` });
+    assert.deepEqual(both.networks, ['arc-testnet', 'arc-testnet-gateway']);
+    assert.equal(typeof both.rails.get('arc-testnet-gateway').terms, 'function', 'the Gateway rail picks its own offers');
     await assert.rejects(guardFromEnv({ SPEND_GUARD_LEDGER: 'off', SPEND_GUARD_POLICY: path.join(dir, 'missing.json') }), /cannot read the policy/);
   });
 });
