@@ -14,13 +14,13 @@ import { EventEmitter } from 'node:events';
  * @typedef {object} Settlement
  * @property {Ask} ask
  * @property {boolean} approved
- * @property {'human'|'timeout'|'closed'} by
+ * @property {'human'|'timeout'|'closed'|'cancelled'} by  `cancelled`: the agent stopped waiting.
  */
 
 /**
  * Payments waiting for a human, answered from the dashboard. `ask` is the Guard's `approve`
- * callback: it resolves true only on an explicit approve, and false on deny, on timeout or when
- * the queue closes, so a payment nobody looked at never goes out.
+ * callback: it resolves true only on an explicit approve, and false on deny, on timeout, when
+ * the agent stops waiting or when the queue closes, so a payment nobody looked at never goes out.
  * Emits 'asked' (Ask) and 'settled' (Settlement).
  */
 export class Approvals extends EventEmitter {
@@ -37,19 +37,24 @@ export class Approvals extends EventEmitter {
   /**
    * @param {import('./policy.js').Intent} intent
    * @param {import('./policy.js').Verdict} verdict
+   * @param {{signal?: AbortSignal}} [options]  When it aborts, the ask is withdrawn from the page.
    * @returns {Promise<boolean>}
    */
-  ask(intent, verdict) {
+  ask(intent, verdict, { signal } = {}) {
+    if (signal?.aborted) return Promise.resolve(false);
     return new Promise((resolve) => {
       const at = this.now();
       const ask = { id: randomUUID(), at, expiresAt: at + this.timeoutMs, intent, verdict };
       const timer = setTimeout(() => settle(false, 'timeout'), this.timeoutMs);
+      const cancel = () => settle(false, 'cancelled');
       const settle = (approved, by) => {
         clearTimeout(timer);
+        signal?.removeEventListener('abort', cancel);
         this.waiting.delete(ask.id);
         this.emit('settled', { ask, approved, by });
         resolve(approved);
       };
+      signal?.addEventListener('abort', cancel, { once: true });
       this.waiting.set(ask.id, { ask, settle });
       this.emit('asked', ask);
     });

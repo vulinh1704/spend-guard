@@ -11,6 +11,13 @@ const policy = {
   services: { 'api.example': { payTo: ['pay.example.testnet'] } },
 };
 
+/** A promise the test settles by hand. */
+function deferred() {
+  let resolve;
+  const promise = new Promise((r) => (resolve = r));
+  return { promise, resolve };
+}
+
 function intent(usd) {
   return {
     resource: 'https://api.example/data',
@@ -72,6 +79,59 @@ describe('guard', () => {
     assert.deepEqual(guard.ledger.entries.map((e) => [e.status, e.error]), [['failed', 'rpc timeout']]);
     // A failed payment does not count against the budget.
     assert.equal(guard.ledger.spentToday(Date.now()), 0n);
+  });
+
+  test('a payment waiting for the human does not hold up payments the policy allows', { timeout: 2000 }, async () => {
+    const rail = new MockRail('near-testnet');
+    const human = deferred();
+    const guard = new Guard({ policy, rails: [rail], approve: () => human.promise });
+    const asking = guard.pay(intent(0.6));
+    await guard.pay(intent(0.2));
+    assert.equal(rail.paid.length, 1, 'paid while the other one waits');
+    human.resolve(true);
+    await asking;
+    assert.equal(rail.paid.length, 2);
+  });
+
+  test('an approved payment is checked again against what was spent while the human decided', { timeout: 2000 }, async () => {
+    const rail = new MockRail('near-testnet');
+    const human = deferred();
+    const guard = new Guard({ policy, rails: [rail], approve: () => human.promise });
+    const asking = guard.pay(intent(0.6));
+    await guard.pay(intent(0.45));
+    human.resolve(true);
+    await assert.rejects(asking, (err) => err.status === 'denied' && err.reasons[0].code === 'daily-budget');
+    assert.equal(rail.paid.length, 1);
+  });
+
+  test('a payment whose caller stopped waiting is not paid, even when approved afterwards', async () => {
+    const rail = new MockRail('near-testnet');
+    const human = deferred();
+    const guard = new Guard({ policy, rails: [rail], approve: () => human.promise });
+    const caller = new AbortController();
+    const paying = guard.pay(intent(0.6), { signal: caller.signal });
+    await new Promise((resolve) => setImmediate(resolve));
+    caller.abort(new Error('client timed out'));
+    human.resolve(true);
+    await assert.rejects(paying, (err) => err instanceof GuardRefused && err.status === 'declined');
+    assert.equal(rail.paid.length, 0);
+    assert.deepEqual(guard.ledger.entries.map((e) => [e.status, e.reasons.at(-1).code]), [['declined', 'cancelled']]);
+  });
+
+  test('a payment still in line when its caller stops waiting is dropped', async () => {
+    const slow = deferred();
+    const paid = [];
+    const rail = { network: 'near-testnet', pay: async (i) => (await slow.promise, paid.push(i), { network: 'near-testnet', txid: 't', proof: {} }) };
+    const guard = new Guard({ policy, rails: [rail] });
+    const first = guard.pay(intent(0.1));
+    const caller = new AbortController();
+    const second = guard.pay(intent(0.2), { signal: caller.signal });
+    caller.abort(new Error('client timed out'));
+    slow.resolve();
+    await first;
+    await assert.rejects(second, /client timed out/);
+    assert.equal(paid.length, 1);
+    assert.deepEqual(guard.ledger.entries.map((e) => e.status), ['paid']);
   });
 
   test('every decision is emitted for the dashboard', async () => {
