@@ -77,7 +77,7 @@ export function evaluate(intent, policy, history) {
   if (!service) {
     (policy.unknownService === 'deny' ? deny : ask).push({ code: 'unknown-service', message: `${intent.host} is not a known service` });
   } else {
-    if (!service.payTo.includes(intent.payTo)) {
+    if (!service.payTo.some((known) => samePayee(known, intent.payTo))) {
       // The classic paywall attack: same host, same price, but the money goes somewhere new.
       deny.push({ code: 'payee-swap', message: `${intent.host} asked to be paid at ${intent.payTo}, which is not one of its known addresses` });
     }
@@ -131,4 +131,13 @@ function median(values) {
 /** One decimal place, e.g. "12.5". */
 function ratio(a, b) {
   return (Number((a * 10n) / b) / 10).toString();
+}
+
+/**
+ * EVM addresses are the same in any letter case (the x402 client checksums them, a policy may be
+ * written in lowercase); every other kind of address must match exactly.
+ */
+function samePayee(a, b) {
+  const evm = /^0x[0-9a-fA-F]{40}$/;
+  return a === b || (evm.test(a) && evm.test(b) && a.toLowerCase() === b.toLowerCase());
 }
