@@ -1,23 +1,68 @@
 {
-  "name": "spend-guard",
-  "version": "0.1.0",
-  "description": "A spending guard for AI agents that pay for things: budgets, payee allowlists and price-spike checks before any payment leaves the wallet. Works with HTTP 402 (x402) paywalls on NEAR, Bitcoin Cash and Concordium.",
+  "name": "@vulinh1704/spend-guard",
+  "version": "0.2.0",
+  "description": "A spending guard for AI agents that pay for things: budgets, payee allowlists, price-spike checks and human approval before any payment leaves the wallet. Pays HTTP 402 (x402) paywalls in USDC on Circle's Arc and in NEAR.",
+  "keywords": [
+    "ai-agents",
+    "x402",
+    "http-402",
+    "usdc",
+    "arc",
+    "circle",
+    "near",
+    "payments",
+    "agent-security",
+    "spending-limits",
+    "mcp"
+  ],
+  "homepage": "https://github.com/vulinh1704/spend-guard#readme",
+  "bugs": {
+    "url": "https://github.com/vulinh1704/spend-guard/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/vulinh1704/spend-guard.git"
+  },
+  "license": "MIT",
+  "author": "Vu Linh Truong (https://github.com/vulinh1704)",
   "type": "module",
+  "main": "./src/index.js",
+  "exports": {
+    ".": "./src/index.js",
+    "./rails/*": "./src/rails/*.js",
+    "./package.json": "./package.json"
+  },
   "bin": {
     "spend-guard": "bin/spend-guard.js"
   },
-  "exports": {
-    ".": "./src/index.js"
-  },
+  "files": [
+    "src/",
+    "bin/",
+    "demo/dashboard.js",
+    "CHANGELOG.md"
+  ],
+  "sideEffects": false,
   "engines": {
-    "node": ">=20"
+    "node": ">=20.19.0"
+  },
+  "publishConfig": {
+    "access": "public"
   },
   "scripts": {
     "test": "node --test test/*.test.js",
+    "demo": "node demo/agent.js",
+    "demo:dashboard": "node demo/agent.js --dashboard",
+    "demo:near": "node demo/agent.js --near --dashboard",
+    "demo:arc": "node demo/agent.js --arc --dashboard",
+    "demo:arc-x402": "node demo/agent.js --arc-x402 --dashboard",
+    "demo:gateway": "node demo/agent.js --gateway --dashboard",
+    "demo:mcp": "node scripts/mcp-demo.js",
     "demo:api": "node demo/paid-api.js",
-    "demo:agent": "node demo/agent.js"
+    "demo:agent": "node demo/agent.js",
+    "check:dashboard": "bash scripts/check-dashboard.sh",
+    "check:pack": "npm pack --dry-run",
+    "prepublishOnly": "npm test"
   },
-  "license": "MIT",
   "dependencies": {
     "@circle-fin/developer-controlled-wallets": "^10.8.1",
     "@circle-fin/x402-batching": "^4.0.0",

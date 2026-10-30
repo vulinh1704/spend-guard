@@ -67,8 +67,8 @@ A Gateway authorization stays valid for at least 7 days, and the payee can settl
 ## Use it in an agent
 
 ```js
-import { Guard, payingFetch } from 'spend-guard';
-import { NearRail } from 'spend-guard/src/rails/near.js';
+import { Guard, payingFetch } from '@vulinh1704/spend-guard';
+import { NearRail } from '@vulinh1704/spend-guard/rails/near';
 
 const guard = new Guard({
   policy: { networks: ['near-testnet'], dailyUsd: 5, perPaymentUsd: 1, askAboveUsd: 0.25, services: { 'api.example.com': { payTo: ['pay.example.testnet'] } } },
