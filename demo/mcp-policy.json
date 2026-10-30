@@ -1,0 +1,13 @@
+{
+  "networks": ["near-testnet"],
+  "dailyUsd": 1,
+  "perPaymentUsd": 0.5,
+  "askAboveUsd": 0.25,
+  "spikeRatio": 5,
+  "unknownService": "ask",
+  "services": {
+    "localhost:4402": {
+      "payTo": ["weather.paywall.testnet", "news.paywall.testnet", "quotes.paywall.testnet", "maps.paywall.testnet"]
+    }
+  }
+}

@@ -29,6 +29,21 @@ export class GuardRefused extends Error {
 }
 
 /**
+ * Thrown by a rail when a transaction was sent but not confirmed (the RPC failed or timed out
+ * after sending): it may still go through, so the guard counts it as spent until someone checks.
+ */
+export class PaymentUnconfirmed extends Error {
+  /** @param {string} txid  @param {Error} cause */
+  constructor(txid, cause) {
+    super(`transaction ${txid} was sent but not confirmed: ${cause.shortMessage ?? cause.message}`, { cause });
+    this.txid = txid;
+  }
+}
+
+/** Added to a payment the agent stopped waiting for: it would never get what it paid for. */
+const CANCELLED = { code: 'cancelled', message: 'the agent stopped waiting, so nothing was paid' };
+
+/**
  * Sits between the agent and its wallets. The agent asks the guard to pay; the guard checks the
  * policy, asks a human when the policy says so, pays through the matching rail and records the
  * outcome. Emits 'entry' for every recorded decision (the dashboard listens to it) and 'settled'
@@ -39,8 +54,9 @@ export class Guard extends EventEmitter {
    * @param {object} options
    * @param {Partial<import('./policy.js').Policy>} options.policy
    * @param {Rail[]} options.rails
-   * @param {(intent: import('./policy.js').Intent, verdict: import('./policy.js').Verdict) => Promise<boolean>} [options.approve]
-   *   Asked for payments the policy flags. Without it, flagged payments are declined.
+   * @param {(intent: import('./policy.js').Intent, verdict: import('./policy.js').Verdict, options: {signal?: AbortSignal}) => Promise<boolean>} [options.approve]
+   *   Asked for payments the policy flags. Without it, flagged payments are declined. The signal
+   *   aborts when the agent stops waiting, so the question can be withdrawn.
    * @param {Ledger} [options.ledger]
    * @param {() => number} [options.now]
    */
@@ -63,15 +79,43 @@ export class Guard extends EventEmitter {
 
   /**
    * @param {import('./policy.js').Intent} intent
+   * @param {{signal?: AbortSignal}} [options]  Abort it when the caller stops waiting: a payment
+   *   that has not gone out by then never does.
    * @returns {Promise<Receipt>}
    */
-  pay(intent) {
-    const run = this.queue.then(() => this.#pay(intent));
+  async pay(intent, { signal } = {}) {
+    const first = await this.#serial(() => this.#turn(intent, signal));
+    if (first.receipt) return first.receipt;
+    // A human takes a while to answer, so the wait happens outside the queue: payments the policy
+    // allows go on meanwhile, and this one is decided again afterwards, against the ledger as it is then.
+    const { verdict } = first;
+    if (!(await this.approve(intent, verdict, { signal }))) {
+      this.#refuse('declined', { at: this.now(), intent, reasons: signal?.aborted ? [...verdict.reasons, CANCELLED] : verdict.reasons, usd: verdict.usd });
+    }
+    return (await this.#serial(() => this.#turn(intent, signal, verdict))).receipt;
+  }
+
+  #serial(step) {
+    // In turn with this guard's other payments, and with other processes sharing the ledger file.
+    const run = this.queue.then(() => this.ledger.exclusive(step));
     this.queue = run.catch(() => {});
     return run;
   }
 
-  async #pay(intent) {
+  /**
+   * A payment's turn in the queue: decide it against the ledger as it is now, then refuse it, pay
+   * it, or hand back the verdict to ask the human about.
+   *
+   * @param {import('./policy.js').Intent} intent
+   * @param {AbortSignal} [signal]
+   * @param {import('./policy.js').Verdict} [approved]  What the human said yes to, once asked.
+   * @returns {Promise<{receipt: Receipt, verdict?: undefined} | {verdict: import('./policy.js').Verdict, receipt?: undefined}>}
+   */
+  async #turn(intent, signal, approved) {
+    if (signal?.aborted) {
+      if (!approved) throw signal.reason;
+      this.#refuse('declined', { at: this.now(), intent, reasons: [...approved.reasons, CANCELLED], usd: approved.usd });
+    }
     const now = this.now();
     const verdict = evaluate(intent, this.policy, {
       spentTodayUsd: this.ledger.spentToday(now),
@@ -79,14 +123,10 @@ export class Guard extends EventEmitter {
     });
     const base = { at: now, intent, reasons: verdict.reasons, usd: verdict.usd };
 
-    if (verdict.decision === 'deny') {
-      this.#record({ ...base, status: 'denied' });
-      throw new GuardRefused('denied', verdict.reasons);
-    }
-    if (verdict.decision === 'ask' && !(await this.approve(intent, verdict))) {
-      this.#record({ ...base, status: 'declined' });
-      throw new GuardRefused('declined', verdict.reasons);
-    }
+    if (verdict.decision === 'deny') this.#refuse('denied', base);
+    // A yes covers the ask rules, which read only the intent and the policy. The deny rules read
+    // the ledger, which may have moved while the human decided: they were just checked again.
+    if (verdict.decision === 'ask' && !approved) return { verdict };
 
     const rail = this.rails.get(intent.network);
     if (!rail) {
@@ -97,9 +137,13 @@ export class Guard extends EventEmitter {
     try {
       const receipt = await rail.pay(intent);
       this.#record({ ...base, status: 'paid', receipt });
-      return receipt;
+      return { receipt };
     } catch (err) {
-      this.#record({ ...base, status: 'failed', error: err.message });
+      if (err instanceof PaymentUnconfirmed) {
+        this.#record({ ...base, status: 'unconfirmed', error: err.message, receipt: { network: intent.network, txid: err.txid } });
+      } else {
+        this.#record({ ...base, status: 'failed', error: err.message });
+      }
       throw err;
     }
   }
@@ -115,6 +159,12 @@ export class Guard extends EventEmitter {
     if (!entry) return;
     this.ledger.settle(entry, settlement, this.now());
     this.emit('settled', entry);
+  }
+
+  /** @returns {never} */
+  #refuse(status, entry) {
+    this.#record({ ...entry, status });
+    throw new GuardRefused(status, entry.reasons);
   }
 
   #record(entry) {

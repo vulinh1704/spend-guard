@@ -4,10 +4,11 @@
  */
 import assert from 'node:assert/strict';
 import { describe, test } from 'node:test';
-import { KeyPair } from 'near-api-js';
+import { baseEncode, createTransaction, KeyPair } from 'near-api-js';
+import { PaymentUnconfirmed } from '../src/guard.js';
 import { checkNearPayment, NearRail } from '../src/rails/near.js';
 
-// A throwaway key: the rail needs one to build its Account, nothing is signed.
+// A throwaway key: the rail signs with it, nothing is sent.
 const KEY = KeyPair.fromRandom('ed25519').toString();
 const TX = 'HyQ4Cr1dyexkQb3iWHk4NA2Y4cxWGVBptVMGmnTTVjLs';
 
@@ -24,20 +25,49 @@ function fakeProvider(result) {
 
 const intent = { resource: 'https://api.example/x', host: 'api.example', network: 'near-testnet', asset: 'near', amount: 1000n, payTo: 'pay.testnet' };
 
+/**
+ * A NEAR rail whose account signs with the rail's signer as near-api-js does, then answers with
+ * `then(sent)` instead of sending: `sent` has the receiver, the actions and the signed id.
+ */
+function fakeNearRail(then) {
+  const rail = new NearRail({ accountId: 'agent.testnet', privateKey: KEY });
+  rail.account.signAndSendTransaction = async ({ receiverId, actions, signer, throwOnFailure }) => {
+    const tx = createTransaction('agent.testnet', await signer.getPublicKey(), receiverId, 1n, actions, new Uint8Array(32));
+    const { txHash } = await signer.signTransaction(tx);
+    return then({ receiverId, actions, throwOnFailure, txid: baseEncode(txHash) });
+  };
+  return rail;
+}
+
 describe('NEAR rail', () => {
   test('a transfer returns the tx hash as proof', async () => {
-    const rail = new NearRail({ accountId: 'agent.testnet', privateKey: KEY });
     let sent;
-    rail.account.transfer = async (args) => ((sent = args), outcome());
+    const rail = fakeNearRail((s) => ((sent = s), outcome()));
     const receipt = await rail.pay(intent);
-    assert.deepEqual(sent, { receiverId: 'pay.testnet', amount: 1000n });
+    assert.equal(sent.receiverId, 'pay.testnet');
+    assert.deepEqual(sent.actions.map((a) => a.transfer?.deposit), [1000n]);
+    assert.equal(sent.throwOnFailure, false, 'a failed outcome is read here, not thrown as if it were unknown');
     assert.deepEqual(receipt, { network: 'near-testnet', txid: TX, proof: { txid: TX, sender: 'agent.testnet' } });
   });
 
   test('a failed transfer throws instead of returning a receipt', async () => {
+    const rail = fakeNearRail(() => outcome({ success: false }));
+    await assert.rejects(rail.pay(intent), (err) => !(err instanceof PaymentUnconfirmed) && /NEAR transfer failed/.test(err.message));
+  });
+
+  test('a transfer signed and then lost in the RPC is unconfirmed, with its transaction id', async () => {
+    let txid;
+    const rail = fakeNearRail((sent) => {
+      txid = sent.txid;
+      throw new Error('Transaction has been routed but not executed yet');
+    });
+    await assert.rejects(rail.pay(intent), (err) => err instanceof PaymentUnconfirmed && err.txid === txid && /was sent but not confirmed/.test(err.message));
+  });
+
+  test('a transfer that fails before it is signed fails outright', async () => {
     const rail = new NearRail({ accountId: 'agent.testnet', privateKey: KEY });
-    rail.account.transfer = async () => outcome({ success: false });
-    await assert.rejects(rail.pay(intent), /NEAR transfer failed/);
+    rail.account.signAndSendTransaction = () => Promise.reject(new Error('access key does not exist'));
+    await assert.rejects(rail.pay(intent), (err) => !(err instanceof PaymentUnconfirmed) && /access key/.test(err.message));
   });
 
   test('only NEAR is paid on this rail', async () => {

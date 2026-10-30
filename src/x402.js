@@ -97,9 +97,10 @@ export function assetKey(network, asset) {
  * paid retry, the server's settlement is recorded on the paid entry (`guard.settled`):
  * `receipt.settlement`, and `receipt.txid` when the rail did not have one already.
  *
- * @param {import('./guard.js').Guard} guard
+ * @param {Pick<import('./guard.js').Guard, 'networks'|'rails'|'pay'|'settled'>} guard
  * @param {string} url
- * @param {RequestInit} [init]
+ * @param {RequestInit} [init]  Its `signal` also reaches the guard: a payment not made by the time
+ *   it aborts is not made.
  * @param {{fetch?: typeof globalThis.fetch}} [options]
  */
 export async function payingFetch(guard, url, init = {}, { fetch = globalThis.fetch } = {}) {
@@ -126,7 +127,7 @@ export async function payingFetch(guard, url, init = {}, { fetch = globalThis.fe
     description: required.x402Version === 2 ? required.resource?.description : chosen.description,
     x402: offer,
     offer: chosen,
-  });
+  }, { signal: init.signal });
 
   if (required.x402Version === 2) {
     // `accepted` is the server's requirement verbatim: v2 servers match it field by field, and

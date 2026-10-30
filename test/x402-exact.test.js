@@ -9,7 +9,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { after, describe, test } from 'node:test';
 import { setTimeout as sleep } from 'node:timers/promises';
-import { domainSeparator, encodeAbiParameters, encodeEventTopics, erc20Abi, parseSignature, recoverTypedDataAddress, serializeSignature, toHex, verifyTypedData } from 'viem';
+import { decodeFunctionData, domainSeparator, encodeAbiParameters, encodeEventTopics, erc20Abi, parseSignature, parseTransaction, recoverTypedDataAddress, serializeSignature, toHex, verifyTypedData } from 'viem';
 import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts';
 import { createPaidApi } from '../demo/paid-api.js';
 import { Guard, GuardRefused } from '../src/guard.js';
@@ -90,7 +90,8 @@ function railCountingSignatures() {
   rail.signed = 0;
   const sign = rail.account.signTypedData;
   rail.account.signTypedData = async (...args) => (rail.signed++, sign(...args));
-  rail.walletClient.writeContract = async () => assert.fail('the rail sent a transaction');
+  rail.walletClient.prepareTransactionRequest = async () => assert.fail('the rail sent a transaction');
+  rail.walletClient.sendRawTransaction = async () => assert.fail('the rail sent a transaction');
   return rail;
 }
 
@@ -308,10 +309,11 @@ describe('ArcRail signing', () => {
   test('an offer without an EIP-712 domain gets the plain transfer, as before', async () => {
     const rail = new ArcRail({ privateKey: KEY });
     let sent;
-    rail.walletClient.writeContract = async (args) => ((sent = args), `0x${'ab'.repeat(32)}`);
+    rail.walletClient.prepareTransactionRequest = async (args) => ({ ...args, chainId: 5042002, nonce: 0, gas: 60_000n, maxFeePerGas: 2n, maxPriorityFeePerGas: 1n, type: 'eip1559' });
+    rail.walletClient.sendRawTransaction = async ({ serializedTransaction }) => (sent = serializedTransaction);
     rail.publicClient.waitForTransactionReceipt = async () => ({ status: 'success' });
     await rail.pay(intent(offer({ x402Version: 1, extra: undefined })));
-    assert.equal(sent.functionName, 'transfer');
+    assert.equal(decodeFunctionData({ abi: erc20Abi, data: parseTransaction(sent).data }).functionName, 'transfer');
   });
 
   test('a v2 offer without an EIP-712 domain gets neither a transfer nor a signature', async () => {
