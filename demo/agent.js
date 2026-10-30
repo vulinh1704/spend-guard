@@ -2,13 +2,15 @@
  * A scripted agent run against the demo paywall: the same calls an LLM agent would make while
  * gathering data for a trip, so the guard's decisions can be shown without a model in the loop.
  *
- *   node demo/agent.js                 # starts its own paywall on a free port
- *   API=http://localhost:4402 node demo/agent.js
+ *   node demo/agent.js                 # mock payments, offline
+ *   node demo/agent.js --near          # real NEAR testnet transfers (needs .env, see scripts/)
  */
+import { existsSync } from 'node:fs';
 import { createPaidApi, PAYEES } from './paid-api.js';
 import { Guard, GuardRefused } from '../src/guard.js';
 import { formatUsd } from '../src/money.js';
 import { MockRail } from '../src/rails/mock.js';
+import { checkNearPayment, NearRail } from '../src/rails/near.js';
 import { payingFetch } from '../src/x402.js';
 
 const PLAN = ['weather', 'news', 'quotes', 'quotes', 'quotes', 'quotes', 'maps', 'maps', 'maps', 'weather'];
@@ -19,13 +21,22 @@ const red = color(31);
 const yellow = color(33);
 const dim = color(2);
 
-let server;
-let base = process.env.API;
-if (!base) {
-  server = createPaidApi();
-  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
-  base = `http://127.0.0.1:${server.address().port}`;
+const near = process.argv.includes('--near');
+let rail;
+let paywall;
+let payees = PAYEES;
+if (near) {
+  if (existsSync('.env')) process.loadEnvFile('.env');
+  const env = process.env;
+  rail = new NearRail({ accountId: env.NEAR_ACCOUNT_ID, privateKey: env.NEAR_PRIVATE_KEY, network: 'near-testnet' });
+  payees = { weather: env.PAYEE_WEATHER, news: env.PAYEE_NEWS, quotes: env.PAYEE_QUOTES, maps: env.PAYEE_MAPS, thief: env.PAYEE_THIEF };
+  paywall = createPaidApi({ network: 'near-testnet', asset: 'near', payees, verify: (payload, expected) => checkNearPayment(rail.provider, payload, expected) });
+} else {
+  rail = new MockRail('near-testnet');
+  paywall = createPaidApi();
 }
+await new Promise((resolve) => paywall.listen(0, '127.0.0.1', resolve));
+const base = `http://127.0.0.1:${paywall.address().port}`;
 
 const guard = new Guard({
   policy: {
@@ -34,21 +45,22 @@ const guard = new Guard({
     perPaymentUsd: 0.5,
     askAboveUsd: 0.25,
     spikeRatio: 5,
-    services: { [new URL(base).host]: { payTo: [PAYEES.weather, PAYEES.news, PAYEES.quotes, PAYEES.maps] } },
+    services: { [new URL(base).host]: { payTo: [payees.weather, payees.news, payees.quotes, payees.maps] } },
   },
-  rails: [new MockRail('near-testnet')],
+  rails: [rail],
   approve: async (intent, verdict) => {
     console.log(yellow(`  ? asks you: ${verdict.reasons.map((r) => r.message).join('; ')} → no`));
     return false;
   },
 });
 
+if (near) console.log(dim(`agent ${rail.accountId} paying on NEAR testnet\n`));
 for (const name of PLAN) {
-  const url = `${base}/${name}`;
   try {
-    const res = await payingFetch(guard, url);
+    const res = await payingFetch(guard, `${base}/${name}`);
     const paid = guard.ledger.entries.at(-1);
-    console.log(`${green('✓ paid')} ${formatUsd(paid.usd).padEnd(7)} /${name.padEnd(8)} ${dim(JSON.stringify(await res.json()))}`);
+    const tx = near ? dim(` https://testnet.nearblocks.io/txns/${paid.receipt.txid}`) : '';
+    console.log(`${green('✓ paid')} ${formatUsd(paid.usd).padEnd(7)} /${name.padEnd(8)} ${dim(JSON.stringify(await res.json()))}${tx}`);
   } catch (err) {
     if (!(err instanceof GuardRefused)) throw err;
     console.log(`${red(`✗ ${err.status}`)} /${name.padEnd(8)} ${err.reasons.map((r) => r.message).join('; ')}`);
@@ -56,4 +68,4 @@ for (const name of PLAN) {
 }
 
 console.log(dim(`\nspent today ${formatUsd(guard.ledger.spentToday(Date.now()))} of $1.00; ${guard.ledger.entries.filter((e) => e.status !== 'paid').length} payments stopped`));
-server?.close();
+paywall.close();
