@@ -3,7 +3,7 @@ import http from 'node:http';
 import { after, before, describe, test } from 'node:test';
 import { createDashboard } from '../demo/dashboard.js';
 import { Approvals } from '../src/approval.js';
-import { Guard, GuardRefused } from '../src/guard.js';
+import { Guard, GuardRefused, PaymentUnconfirmed } from '../src/guard.js';
 import { MockRail } from '../src/rails/mock.js';
 
 const intent = (payTo, usd = 0.01, path = '/weather') => ({ resource: `https://api.example${path}`, host: 'api.example', network: 'near-testnet', asset: 'usdc', amount: BigInt(Math.round(usd * 1e6)), payTo });
@@ -102,6 +102,26 @@ describe('dashboard', () => {
 
   test('without approvals it takes no answers', async () => {
     assert.equal((await fromPage(base, 'x', true)).status, 404);
+  });
+
+  test('an unconfirmed payment shows its transaction and counts as spent; a failed one shows its error', async (t) => {
+    const rail = { network: 'near-testnet', pay: async (i) => { throw i.amount > 10_000n ? new PaymentUnconfirmed('abc', new Error('RPC timeout')) : new Error('access key does not exist'); } };
+    const other = new Guard({ policy, rails: [rail] });
+    const server = createDashboard(other, { explorer: (tx) => `https://explorer.example/tx/${tx}` });
+    const url = await listen(server);
+    t.after(() => {
+      server.closeAllConnections();
+      server.close();
+    });
+    await assert.rejects(other.pay(intent('pay.testnet', 0.02)), PaymentUnconfirmed);
+    await assert.rejects(other.pay(intent('pay.testnet', 0.01)), /access key/);
+
+    const stream = await events(`${url}/events`);
+    const unconfirmed = (await stream.next()).data;
+    assert.deepEqual([unconfirmed.status, unconfirmed.tx, unconfirmed.txUrl, unconfirmed.spent], ['unconfirmed', 'abc', 'https://explorer.example/tx/abc', '$0.02']);
+    assert.equal((await stream.next()).data.error, 'access key does not exist');
+    stream.close();
+    assert.match(await (await fetch(url)).text(), /unconfirmed: 'Unconfirmed'/);
   });
 });
 

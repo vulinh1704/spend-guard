@@ -15,7 +15,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { createPaidApi, PAYEES } from '../demo/paid-api.js';
 import { Approvals } from '../src/approval.js';
-import { Guard } from '../src/guard.js';
+import { Guard, PaymentUnconfirmed } from '../src/guard.js';
 import { guardFromEnv, loadLedger, PROTOCOL_VERSIONS, serveMcp, TOOLS, toolRunner } from '../src/mcp.js';
 import { MockRail } from '../src/rails/mock.js';
 
@@ -150,6 +150,24 @@ describe('mcp tools', () => {
     const { run } = setUp(host);
     const result = await run('pay_and_fetch', { url: `${base}/data` });
     assert.match(textOf(result), /^Paid \$0\.01 to weather\.paywall\.testnet on near-testnet, transaction [0-9a-f]{32}, but the paid request failed/);
+  });
+
+  test('a payment sent but not confirmed: the agent is told it may have gone out, and not to pay again', async (t) => {
+    const { base, host } = await paywall(t);
+    const { guard } = setUp(host);
+    guard.rails.set('near-testnet', { network: 'near-testnet', pay: async () => { throw new PaymentUnconfirmed('abc', new Error('RPC timeout')); } });
+    const result = await toolRunner({ guard })('pay_and_fetch', { url: `${base}/weather` });
+    assert.equal(result.isError, true);
+    assert.equal(textOf(result), 'The payment of $0.01 to weather.paywall.testnet on near-testnet is unconfirmed: transaction abc was sent but not confirmed: RPC timeout. It may still go through, so do not pay again: tell the user, who can check the transaction.');
+    assert.match(textOf(await toolRunner({ guard })('spending_status')), /^Spent today \(UTC\): \$0\.01 .*\nToday: 0 paid, 1 unconfirmed, 0 stopped\./);
+  });
+
+  test('a payment that failed before it went out says nothing was paid', async (t) => {
+    const { base, host } = await paywall(t);
+    const { guard } = setUp(host);
+    guard.rails.set('near-testnet', { network: 'near-testnet', pay: async () => { throw new Error('access key does not exist'); } });
+    const result = await toolRunner({ guard })('pay_and_fetch', { url: `${base}/weather` });
+    assert.equal(textOf(result), 'The payment failed, so nothing was paid: access key does not exist');
   });
 
   test('a paywall that stalls once paid cannot hold the call', { timeout: 3000 }, async (t) => {

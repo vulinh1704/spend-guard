@@ -155,6 +155,10 @@ export function toolRunner({ guard, approvals, dashboardUrl, responseTimeoutMs =
     // Not retried: the request may not be safe to repeat, and a paywall that already took the
     // proof refuses it a second time. The agent must not pay again for what it already paid for.
     if (entry?.status === 'paid') return `Paid ${payment(entry)}, but the paid request failed: ${why}. Do not pay again: tell the user, who can check the payment.`;
+    if (entry?.status === 'unconfirmed') {
+      return `The payment of ${formatUsd(entry.usd)} to ${entry.intent.payTo} on ${entry.intent.network} is unconfirmed: ${entry.error}. It may still go through, so do not pay again: tell the user, who can check the transaction.`;
+    }
+    // The rails report a failure after sending as unconfirmed, so a failed payment never left.
     if (entry?.status === 'failed') return `The payment failed, so nothing was paid: ${entry.error}`;
     return `Could not fetch ${url}: ${why}`;
   }
@@ -196,9 +200,10 @@ export function toolRunner({ guard, approvals, dashboardUrl, responseTimeoutMs =
     const daily = usdToMicro(guard.policy.dailyUsd);
     const today = guard.ledger.entries.filter((e) => utcDay(e.at) === utcDay(now));
     const paid = today.filter((e) => e.status === 'paid').length;
+    const unconfirmed = today.filter((e) => e.status === 'unconfirmed').length;
     const lines = [
       `Spent today (UTC): ${formatUsd(spent)} of the ${formatUsd(daily)} daily budget; ${formatUsd(spent < daily ? daily - spent : 0n)} left.`,
-      `Today: ${paid} paid, ${today.length - paid} stopped.`,
+      `Today: ${paid} paid, ${unconfirmed ? `${unconfirmed} unconfirmed, ` : ''}${today.length - paid - unconfirmed} stopped.`,
     ];
     const pending = approvals?.pending ?? [];
     if (pending.length) {

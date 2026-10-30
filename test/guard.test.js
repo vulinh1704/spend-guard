@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { describe, test } from 'node:test';
-import { Guard, GuardRefused } from '../src/guard.js';
+import { Guard, GuardRefused, PaymentUnconfirmed } from '../src/guard.js';
 import { MockRail } from '../src/rails/mock.js';
 
 const policy = {
@@ -79,6 +79,17 @@ describe('guard', () => {
     assert.deepEqual(guard.ledger.entries.map((e) => [e.status, e.error]), [['failed', 'rpc timeout']]);
     // A failed payment does not count against the budget.
     assert.equal(guard.ledger.spentToday(Date.now()), 0n);
+  });
+
+  test('a payment sent but not confirmed is recorded as unconfirmed and counts against the budget', async () => {
+    const rail = { network: 'near-testnet', pay: async () => { throw new PaymentUnconfirmed('abc', new Error('RPC timeout')); } };
+    const guard = new Guard({ policy, rails: [rail] });
+    await assert.rejects(guard.pay(intent(0.45)), PaymentUnconfirmed);
+    const [entry] = guard.ledger.entries;
+    assert.deepEqual([entry.status, entry.receipt.txid, entry.error], ['unconfirmed', 'abc', 'transaction abc was sent but not confirmed: RPC timeout']);
+    assert.equal(guard.ledger.spentToday(Date.now()), 450_000n, 'it may still go through');
+    await assert.rejects(guard.pay(intent(0.45)), PaymentUnconfirmed);
+    await assert.rejects(guard.pay(intent(0.45)), (err) => err.status === 'denied' && err.reasons[0].code === 'daily-budget');
   });
 
   test('a payment waiting for the human does not hold up payments the policy allows', { timeout: 2000 }, async () => {

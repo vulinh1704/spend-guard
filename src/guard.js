@@ -25,6 +25,18 @@ export class GuardRefused extends Error {
   }
 }
 
+/**
+ * Thrown by a rail when a transaction was sent but not confirmed (the RPC failed or timed out
+ * after sending): it may still go through, so the guard counts it as spent until someone checks.
+ */
+export class PaymentUnconfirmed extends Error {
+  /** @param {string} txid  @param {Error} cause */
+  constructor(txid, cause) {
+    super(`transaction ${txid} was sent but not confirmed: ${cause.shortMessage ?? cause.message}`, { cause });
+    this.txid = txid;
+  }
+}
+
 /** Added to a payment the agent stopped waiting for: it would never get what it paid for. */
 const CANCELLED = { code: 'cancelled', message: 'the agent stopped waiting, so nothing was paid' };
 
@@ -122,7 +134,11 @@ export class Guard extends EventEmitter {
       this.#record({ ...base, status: 'paid', receipt });
       return { receipt };
     } catch (err) {
-      this.#record({ ...base, status: 'failed', error: err.message });
+      if (err instanceof PaymentUnconfirmed) {
+        this.#record({ ...base, status: 'unconfirmed', error: err.message, receipt: { network: intent.network, txid: err.txid } });
+      } else {
+        this.#record({ ...base, status: 'failed', error: err.message });
+      }
       throw err;
     }
   }

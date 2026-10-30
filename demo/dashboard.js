@@ -31,6 +31,7 @@ export function createDashboard(guard, { title = 'Spend Guard', account = '', ex
     payTo: entry.intent.payTo,
     reasons: entry.reasons.map((r) => r.message),
     answer: answers.get(entry.intent) ?? null,
+    error: entry.error ?? null,
     tx: entry.receipt?.txid ?? null,
     txUrl: entry.receipt?.txid && explorer ? explorer(entry.receipt.txid, entry.intent.network) : null,
     spent: formatUsd(guard.ledger.spentToday(entry.at)),
@@ -204,8 +205,10 @@ function page({ title, account, daily, perPayment, askAbove, spike }) {
   .feed > li { background: var(--card); border: 1px solid var(--line); border-left-width: 4px; border-radius: 10px; padding: 10px 14px; display: grid; grid-template-columns: auto 1fr auto; gap: 4px 12px; align-items: baseline; animation: in .35s ease; min-width: 0; }
   .feed > li.paid { border-left-color: var(--ok); }
   .feed > li.denied, .feed > li.declined, .feed > li.failed { border-left-color: var(--stop); }
+  .feed > li.unconfirmed { border-left-color: var(--ask); }
   .pill { font-size: 12px; font-weight: 650; padding: 2px 8px; border-radius: 999px; white-space: nowrap; }
   .paid .pill { color: var(--ok); background: var(--ok-bg); }
+  .unconfirmed .pill { color: var(--ask); background: var(--ask-bg); }
   .denied .pill, .declined .pill, .failed .pill { color: var(--stop); background: var(--stop-bg); }
   .endpoint { font: 14px ui-monospace, SFMono-Regular, Menlo, monospace; min-width: 0; overflow-wrap: anywhere; }
   .amount { font-variant-numeric: tabular-nums; font-weight: 600; white-space: nowrap; }
@@ -247,7 +250,7 @@ function page({ title, account, daily, perPayment, askAbove, spike }) {
   /** @type {Map<string, {li: HTMLLIElement, deadline: number, label: string}>} */
   const asks = new Map();
   let counts = { paid: 0, stopped: 0 };
-  const LABEL = { paid: 'Paid', denied: 'Stopped', declined: 'Declined', failed: 'Failed' };
+  const LABEL = { paid: 'Paid', unconfirmed: 'Unconfirmed', denied: 'Stopped', declined: 'Declined', failed: 'Failed' };
   const ANSWER = { approved: 'approved by you', denied: 'you denied it', timeout: 'no answer in time' };
   const text = (tag, cls, value) => { const el = document.createElement(tag); el.className = cls; el.textContent = value; return el; };
   const clock = (ms) => { const s = Math.ceil(ms / 1000); return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0'); };
@@ -260,16 +263,18 @@ function page({ title, account, daily, perPayment, askAbove, spike }) {
     const detail = document.createElement('div');
     detail.className = 'detail';
     const answered = e.answer ? ANSWER[e.answer] + ' · ' : '';
-    if (e.status === 'paid') {
-      detail.append(answered + 'to ' + e.payTo + (e.tx ? ' · ' : ''));
+    if (e.status === 'paid' || e.status === 'unconfirmed') {
+      const to = e.status === 'paid' ? 'to ' + e.payTo : 'sent to ' + e.payTo + ' but not confirmed: it may still go through, check the transaction';
+      detail.append(answered + to + (e.tx ? ' · ' : ''));
       if (e.txUrl) { const a = document.createElement('a'); a.href = e.txUrl; a.target = '_blank'; a.rel = 'noopener'; a.textContent = e.tx.slice(0, 10) + '…'; detail.append(a); }
       else if (e.tx) detail.append(e.tx.slice(0, 10) + '…');
     } else {
-      detail.textContent = answered + e.reasons.join(' · ');
+      detail.textContent = answered + (e.error ? [...e.reasons, e.error] : e.reasons).join(' · ');
     }
     li.append(detail);
     feed.prepend(li);
-    if (e.status === 'paid') counts.paid++; else counts.stopped++;
+    // An unconfirmed payment is neither: it counts in the spend above, as it may have gone out.
+    if (e.status === 'paid') counts.paid++; else if (e.status !== 'unconfirmed') counts.stopped++;
     document.getElementById('paid').textContent = counts.paid;
     document.getElementById('stopped').textContent = counts.stopped;
     document.getElementById('spent').textContent = e.spent;

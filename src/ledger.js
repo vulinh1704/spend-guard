@@ -4,11 +4,12 @@ import { priceKey } from './policy.js';
 /**
  * @typedef {object} Entry
  * @property {number} at  ms since epoch
- * @property {'paid'|'denied'|'declined'|'failed'} status
+ * @property {'paid'|'unconfirmed'|'denied'|'declined'|'failed'} status  `unconfirmed`: sent, but
+ *   the rail could not confirm it went through. `failed`: it never left.
  * @property {import('./policy.js').Intent} intent
  * @property {import('./policy.js').Reason[]} reasons
  * @property {bigint} usd  micro-dollars
- * @property {object} [receipt]
+ * @property {{network: string, txid: string, proof?: object}} [receipt]  An unconfirmed payment has its txid only.
  * @property {string} [error]
  */
 
@@ -28,11 +29,11 @@ export class Ledger {
     return entry;
   }
 
-  /** Micro-dollars actually paid on the UTC day of `now`. */
+  /** Micro-dollars paid on the UTC day of `now`, counting unconfirmed payments: they may have gone out. */
   spentToday(now) {
     const day = utcDay(now);
     let total = 0n;
-    for (const e of this.entries) if (e.status === 'paid' && utcDay(e.at) === day) total += e.usd;
+    for (const e of this.entries) if ((e.status === 'paid' || e.status === 'unconfirmed') && utcDay(e.at) === day) total += e.usd;
     return total;
   }
 

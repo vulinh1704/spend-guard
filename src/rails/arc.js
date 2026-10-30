@@ -1,5 +1,6 @@
-import { createPublicClient, createWalletClient, defineChain, erc20Abi, http, isAddressEqual, parseEventLogs } from 'viem';
+import { createPublicClient, createWalletClient, defineChain, encodeFunctionData, erc20Abi, http, isAddressEqual, keccak256, parseEventLogs } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
+import { PaymentUnconfirmed } from '../guard.js';
 
 /** Circle's Arc testnet: USDC is the gas token, and the USDC ERC-20 (6 decimals) lives at a fixed address. */
 export const arcTestnet = defineChain({
@@ -39,8 +40,18 @@ export class ArcRail {
   /** @param {import('../policy.js').Intent} intent */
   async pay(intent) {
     if (intent.asset !== 'usdc') throw new Error(`ArcRail pays in USDC; ${intent.resource} asked for ${intent.asset}`);
-    const hash = await this.walletClient.writeContract({ address: ARC_USDC, abi: erc20Abi, functionName: 'transfer', args: [intent.payTo, intent.amount] });
-    const receipt = await this.publicClient.waitForTransactionReceipt({ hash });
+    // Signed before it is sent, so the hash is known: once sent, an RPC error or the receipt wait
+    // timing out does not mean nothing was paid, only that it is not confirmed yet.
+    const data = encodeFunctionData({ abi: erc20Abi, functionName: 'transfer', args: [intent.payTo, intent.amount] });
+    const serializedTransaction = await this.account.signTransaction(await this.walletClient.prepareTransactionRequest({ to: ARC_USDC, data }));
+    const hash = keccak256(serializedTransaction);
+    let receipt;
+    try {
+      await this.walletClient.sendRawTransaction({ serializedTransaction });
+      receipt = await this.publicClient.waitForTransactionReceipt({ hash });
+    } catch (err) {
+      throw new PaymentUnconfirmed(hash, err);
+    }
     if (receipt.status !== 'success') throw new Error(`USDC transfer ${hash} reverted`);
     return { network: this.network, txid: hash, proof: { txid: hash, sender: this.account.address } };
   }
