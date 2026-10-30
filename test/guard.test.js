@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { describe, test } from 'node:test';
-import { Guard, GuardRefused, PaymentUnconfirmed } from '../src/guard.js';
+import { Guard, GuardRefused, PaymentPending, PaymentUnconfirmed } from '../src/guard.js';
 import { MockRail } from '../src/rails/mock.js';
 
 const policy = {
@@ -143,6 +143,18 @@ describe('guard', () => {
     await assert.rejects(second, /client timed out/);
     assert.equal(paid.length, 1);
     assert.deepEqual(guard.ledger.entries.map((e) => e.status), ['paid']);
+  });
+
+  test('a payment the rail can\'t confirm is unconfirmed and counts against the budget, so a retry can\'t overspend', async () => {
+    const receipt = { network: 'near-testnet', provider: { transactionId: 'tx-1' } };
+    const rail = { network: 'near-testnet', pay: async () => { throw new PaymentPending('tx-1 may still complete', receipt); } };
+    const guard = new Guard({ policy, rails: [rail] });
+    await assert.rejects(guard.pay(intent(0.45)), PaymentPending);
+    assert.deepEqual(guard.ledger.entries.map((e) => [e.status, e.error, e.receipt]), [['unconfirmed', 'tx-1 may still complete', receipt]]);
+    assert.equal(guard.ledger.spentToday(Date.now()), 450_000n);
+    assert.deepEqual(guard.ledger.recentPrices(intent(0.45)), [450_000n]);
+    await assert.rejects(guard.pay(intent(0.45)), PaymentPending);
+    await assert.rejects(guard.pay(intent(0.45)), (err) => err instanceof GuardRefused && err.reasons.some((r) => r.code === 'daily-budget'));
   });
 
   test('every decision is emitted for the dashboard', async () => {

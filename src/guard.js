@@ -29,13 +29,30 @@ export class GuardRefused extends Error {
 }
 
 /**
- * Thrown by a rail when a transaction was sent but not confirmed (the RPC failed or timed out
- * after sending): it may still go through, so the guard counts it as spent until someone checks.
+ * Thrown by a rail when money may have left but the rail can't tell, such as a transfer still
+ * pending when it stopped waiting. The guard records it as 'unconfirmed', which counts against
+ * the budget like 'paid': paying again must not go past the budget if the first one went through.
  */
-export class PaymentUnconfirmed extends Error {
+export class PaymentPending extends Error {
+  /**
+   * @param {string} message  Says where to check before paying again.
+   * @param {object} receipt  What is known so far, such as the transaction or the provider's id.
+   * @param {ErrorOptions} [options]
+   */
+  constructor(message, receipt, options) {
+    super(message, options);
+    this.receipt = receipt;
+  }
+}
+
+/**
+ * A PaymentPending whose transaction is known: it was sent but not confirmed (the RPC failed or
+ * timed out after sending), so it may still go through.
+ */
+export class PaymentUnconfirmed extends PaymentPending {
   /** @param {string} txid  @param {Error} cause */
   constructor(txid, cause) {
-    super(`transaction ${txid} was sent but not confirmed: ${cause.shortMessage ?? cause.message}`, { cause });
+    super(`transaction ${txid} was sent but not confirmed: ${cause.shortMessage ?? cause.message}`, { txid }, { cause });
     this.txid = txid;
   }
 }
@@ -139,8 +156,8 @@ export class Guard extends EventEmitter {
       this.#record({ ...base, status: 'paid', receipt });
       return { receipt };
     } catch (err) {
-      if (err instanceof PaymentUnconfirmed) {
-        this.#record({ ...base, status: 'unconfirmed', error: err.message, receipt: { network: intent.network, txid: err.txid } });
+      if (err instanceof PaymentPending) {
+        this.#record({ ...base, status: 'unconfirmed', error: err.message, receipt: { network: intent.network, ...err.receipt } });
       } else {
         this.#record({ ...base, status: 'failed', error: err.message });
       }
