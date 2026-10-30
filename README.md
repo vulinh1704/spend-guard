@@ -1,84 +1,219 @@
-# spend-guard
+# Spend Guard
 
-A spending guard for AI agents that pay for things. The agent never touches a wallet directly. It asks the guard, and the guard checks every payment before any money leaves:
+**A spending guard for AI agents that pay for APIs in USDC.**
 
-- **Budgets** per payment, per day and per service.
-- **Payee allowlist:** a paywall that suddenly asks to be paid at a new address is refused.
-- **Price spikes:** a price several times the endpoint's usual price is refused.
-- **Human approval** for payments above a threshold or to unknown services.
-- **One payment at a time,** so parallel tool calls cannot both slip under the daily budget.
+Agents are starting to pay per call over HTTP 402: the server answers `402 Payment Required` with a price, the agent pays and gets the data (the [x402](https://www.x402.org/) protocol). An agent that can pay can also be talked into paying: a prompt injection, a retry loop, or a paywall that raises its price or swaps its payout address. Spend Guard sits between the agent and its money. Every payment is checked against budgets, a payee allowlist and the endpoint's usual price, and anything unusual waits for a person to approve it. All of this happens before any USDC leaves and before any authorization is signed. It pays on Circle's Arc testnet by plain USDC transfer, by x402 `exact` (EIP-3009) and by Circle Gateway nanopayments, from a local key or a Circle developer-controlled wallet. Claude and other MCP clients can use it as an MCP server.
 
-The guard pays HTTP 402 paywalls in the x402 style: the server answers 402 with what it accepts, the guard decides, the rail pays, and the request is repeated with proof.
+Status: testnet only, not audited, not on npm yet. MIT licensed.
 
-| Rail | Status |
-|---|---|
-| Mock (offline demo, tests) | works |
-| NEAR testnet | works: real NEAR transfers, and the paywall verifies each one on chain |
-| Arc testnet (Circle) | works: real USDC transfers, and the paywall checks each receipt's USDC Transfer event |
-| Circle Gateway on Arc testnet | works: gasless USDC nanopayments (x402 v2), settled by Circle in batches on Arc |
-| Bitcoin Cash, Concordium | planned |
+## What it stops
 
-## Try it
+The demo paywall behaves for a few calls and then turns bad. `/quotes` raises its price 40x, and `/maps` asks to be paid at a look-alike address. `/report` stays honest but costs more than the agent may pay without asking. This is the offline demo, `node demo/agent.js`:
 
 ```
-npm install
-npm test                                 # 50 tests
-node demo/agent.js                       # offline, mock payments
-node demo/agent.js --dashboard           # live page on http://localhost:4400
-```
-
-```
+✓ paid $0.01   /weather  {"city":"Hanoi","tempC":29,"sky":"clear"}
+✓ paid $0.02   /news     {"headlines":["Stablecoin volume hits a record","New L2 opens its testnet"]}
 ✓ paid $0.01   /quotes   {"NEAR":2.5,"BCH":450}
-✗ denied /quotes   $0.40 is 40x the usual $0.01 for …/quotes; $0.40 is above the $0.25 that needs your approval
-✗ denied /maps     … asked to be paid at rnaps.paywall.testnet, which is not one of its known addresses
-spent today $0.10 of $1.00; 2 payments stopped
+✓ paid $0.01   /quotes   {"NEAR":2.5,"BCH":450}
+✓ paid $0.01   /quotes   {"NEAR":2.5,"BCH":450}
+✗ denied /quotes   $0.40 is 40x the usual $0.01 for 127.0.0.1:33955/quotes; $0.40 is above the $0.25 that needs your approval
+✓ paid $0.015  /maps     {"route":"Hoan Kiem → My Dinh","km":11.2}
+✓ paid $0.015  /maps     {"route":"Hoan Kiem → My Dinh","km":11.2}
+✗ denied /maps     127.0.0.1:33955 asked to be paid at rnaps.paywall.testnet, which is not one of its known addresses
+✓ paid $0.01   /weather  {"city":"Hanoi","tempC":29,"sky":"clear"}
+  ? asks you: $0.30 is above the $0.25 that needs your approval → no
+✗ declined /report   $0.30 is above the $0.25 that needs your approval
+
+spent today $0.10 of $1.00; 3 payments stopped
 ```
 
-### On NEAR testnet
+The same run on Arc testnet with x402 `exact` (`node demo/agent.js --arc-x402`, 31 Oct 2026) paid in real test USDC. The agent only signed. The paywall settled each signature on chain and paid the gas, so the agent's balance fell by exactly the $0.10 it spent:
 
 ```
-node scripts/near-testnet-account.js     # agent account from the testnet faucet, key in .env
-node scripts/near-demo-payees.js         # paywall account and payees, incl. the look-alike "rnaps"
-node demo/agent.js --near --dashboard    # real testnet transfers, each verified on chain
+agent 0xBbc0B612C19beA521D2eA1Ad7dfEe91D23753244 · Arc testnet (USDC) · x402 v2 exact, EIP-3009
+✓ paid $0.01   /weather  … https://testnet.arcscan.app/tx/0x92414aea1d896cd7ebd032c85ca32a84764d743931e61f4474a92f434a61fae3
+✗ denied /maps     … asked to be paid at 0xF870cC7D7c258Cc856197fB6C3C819AD6Bb324b5, which is not one of its known addresses
+agent wallet $17.999436 → $17.899436 USDC (-$0.10)
 ```
 
-### On Arc testnet (USDC)
+| Rule | What it catches |
+|---|---|
+| Budgets per payment, per day and per service | runaway loops, overpriced calls |
+| Payee allowlist per service | a paywall that starts asking to be paid somewhere else |
+| Price spike against the endpoint's usual price | a sudden 5x, 40x, 1000x |
+| Human approval above a threshold, or for an unknown service | large payments, detours an injected page suggests |
+| One decision at a time (with a ledger file, across processes too) | parallel tool calls racing the daily budget |
+
+Every decision, paid or not, is recorded with its reasons. The rules and their exact messages are in [docs/policy.md](docs/policy.md).
+
+## How it works
 
 ```
-node scripts/arc-testnet-wallet.js       # agent key and payee addresses in .env; prints the agent address
-                                         # fund it with test USDC at https://faucet.circle.com (Arc Testnet)
-node demo/agent.js --arc --dashboard     # real USDC transfers, each checked against its receipt
+agent ── payingFetch(url) ──► paywall: 402 + offer (PAYMENT-REQUIRED)
+              │
+              ▼
+            Guard ── policy: budgets, payees, usual price ── ledger
+              │  └─ flagged? ask the person on the dashboard
+              ▼
+            Rail ── USDC transfer · EIP-3009 signature · Gateway authorization · Circle wallet
+              │
+payingFetch ──► paywall: PAYMENT-SIGNATURE ──► 200 + data + PAYMENT-RESPONSE (settlement)
 ```
 
-### Circle Gateway nanopayments on Arc testnet
+The guard decides before a rail moves money or signs anything. A rail that signs uses the payee and amount the guard approved, never the paywall's own numbers, and it pins the chain and token it signs for. More in [docs/architecture.md](docs/architecture.md).
 
-The agent deposits USDC into Circle's Gateway Wallet once. After that each call is paid with an off-chain authorization: no gas, no transaction per call, and Circle settles the payments on Arc in batches a few minutes later. No Circle account or API key is needed on testnet.
+## Rails
+
+| Rail | How the agent pays | Status |
+|---|---|---|
+| Arc USDC transfer (`--arc`) | ERC-20 `transfer` from the agent's key. The paywall checks the receipt's USDC `Transfer` event. | Works on Arc testnet, for example [this payment](https://testnet.arcscan.app/tx/0xf5f21167bc08705aba8a1c4c79278552ef83a7373634f3fcdc167fa0220c4952). |
+| x402 `exact` on Arc (`--arc-x402`) | Signs an EIP-3009 `transferWithAuthorization` for USDC. The paywall verifies and settles it, and pays the gas. | Works on Arc testnet. The demo paywall is its own settler. |
+| Circle Gateway (`--gateway`) | Signs a Gateway authorization against USDC deposited once in Circle's Gateway Wallet. Circle settles the payments in batches. | Works on Arc testnet, with no Circle account or API key. One earlier run's payments landed in [one batch transaction](https://testnet.arcscan.app/tx/0x52319ff9e84fa8fa67b2c716e4e1918775d66c3823a489980010e670d75f3833). |
+| Circle Wallets | A Circle developer-controlled wallet transfers or signs, so no private key sits in the agent's process. | Tested offline against Circle's SDK. Not run against Circle yet, because it needs your Circle account ([setup](docs/circle-wallets.md)). |
+| NEAR testnet (`--near`) | Native NEAR transfer. | Works on NEAR testnet. |
+| Mock | Nothing moves. | Tests and the offline demo. |
+| Bitcoin Cash, Concordium | | Planned. |
+
+Details for each rail are in [docs/rails.md](docs/rails.md).
+
+### x402 v2 and the `exact` scheme (EIP-3009)
+
+`payingFetch` speaks x402 v2. It reads the offer from the `PAYMENT-REQUIRED` header, and still reads v1 JSON bodies. For an `exact` offer in USDC on Arc that names the token's EIP-712 domain, the agent signs a `transferWithAuthorization` and sends no transaction. The signature is the payment, so the guard decides first and counts it as spent when it is signed. Each signature is for the approved payee and amount only, has a fresh random nonce, and is valid for at most 120 seconds. Offers for another chain (the same key works on Arc mainnet), another token, or Permit2 and escrow flows are refused before anything is signed, with the reason.
 
 ```
-node scripts/gateway-deposit.js 1        # approve + deposit 1 test USDC into Gateway (2 Arc transactions)
+node scripts/arc-testnet-wallet.js       # agent key and demo payees in .env; fund the agent at https://faucet.circle.com (Arc Testnet)
+node scripts/arc-facilitator.js          # the demo paywall's settling key, topped up with a little test USDC for gas
+node demo/agent.js --arc-x402 --dashboard
+```
+
+### Circle Gateway nanopayments
+
+The agent deposits USDC into Circle's Gateway Wallet once. After that each call is an off-chain authorization: no gas and no transaction per call, so a $0.01 call costs $0.01. Circle settles the payments on Arc in batches a few minutes later. A Gateway authorization stays valid for at least 7 days, so the guard decides before it is signed. The rail also signs nothing the deposit can't cover, counting what is signed but not settled yet.
+
+```
+node scripts/gateway-deposit.js 1        # approve and deposit 1 test USDC (two Arc transactions)
 node demo/agent.js --gateway --dashboard # nanopayments to an x402 v2 seller that settles each one with Circle
 node scripts/gateway-status.js           # Gateway balance, and each payment's batch transaction on Arc
 ```
 
-A Gateway authorization stays valid for at least 7 days, and the payee can settle it at any time until then. So the guard decides before anything is signed, a signature counts as spent, and a paywall that answers 402 again after being paid gets no second signature. The guard's budgets are what limit spending. The rail also signs nothing the Gateway balance can't cover, counting what it signed that the payee has not settled yet, so no authorization waits for a later deposit to pay it out. It keeps that count in memory, so it starts from zero after a restart.
+### Circle Wallets
 
-`.env` is git-ignored. Testnet tokens have no value. Never point the scripts at mainnet.
+With `CircleWalletRail`, Circle holds the key (MPC) and signs when asked. The agent's process has a testnet API key and an entity secret, but no private key, and Spend Guard still checks every payment before Circle is asked to send or sign. Circle's own controls (custody, screening, `DENIED`) still apply after the guard says yes. [docs/circle-wallets.md](docs/circle-wallets.md) explains the setup, which needs your own Circle developer account, and how the two layers fit together.
 
-## Use it in an agent
+## Use it from Claude (MCP)
+
+`spend-guard mcp` gives an MCP client three tools:
+
+- `pay_and_fetch` fetches a URL and pays its x402 paywall through the guard.
+- `spending_status` and `spending_policy` are read-only views of the budget, recent payments and the rules.
+
+There is no tool to approve a payment or to change the policy. Payments the policy flags wait for you on the dashboard. They are declined after 55 seconds without an answer, and a call the client cancels never pays.
+
+`.mcp.json` (Claude Code, project scope), or `claude_desktop_config.json` (Claude Desktop, same shape):
+
+```json
+{
+  "mcpServers": {
+    "spend-guard": {
+      "command": "node",
+      "args": ["--env-file=/abs/path/spend-guard/.env", "/abs/path/spend-guard/bin/spend-guard.js", "mcp"],
+      "env": { "SPEND_GUARD_POLICY": "/abs/path/policy.json", "SPEND_GUARD_RAILS": "arc,gateway" }
+    }
+  }
+}
+```
+
+Or in Claude Code: `claude mcp add spend-guard --env SPEND_GUARD_POLICY=/abs/path/policy.json --env SPEND_GUARD_RAILS=arc -- node --env-file=/abs/path/spend-guard/.env /abs/path/spend-guard/bin/spend-guard.js mcp`
+
+`policy.json`:
+
+```json
+{ "networks": ["arc-testnet", "arc-testnet-gateway"], "dailyUsd": 1, "perPaymentUsd": 0.5, "askAboveUsd": 0.25, "spikeRatio": 5, "unknownService": "ask",
+  "services": { "api.example.com": { "payTo": ["0xPayeeAddress"], "maxUsd": 0.1 } } }
+```
+
+| Variable | Meaning |
+|---|---|
+| `SPEND_GUARD_RAILS` | `mock` (default, pays nothing), `near`, `arc`, `gateway`, or a comma list |
+| `SPEND_GUARD_POLICY` | the policy file. Without one, every service is unknown, so every payment asks you. |
+| `SPEND_GUARD_LEDGER` | decisions file, read back on start, so a restart keeps today's spend. Servers on one file share one budget. Default `~/.spend-guard/ledger.jsonl`. |
+| `SPEND_GUARD_DASHBOARD_PORT` | default 4400. `off` means no dashboard, and flagged payments are declined. |
+| `SPEND_GUARD_APPROVAL_TIMEOUT` | seconds a payment waits for you (default 55). Raise it together with your client's tool timeout. |
+
+Keys come from `.env` through `--env-file` and never go in the client's config. Run the paying agent without shell or browser tools: with them it could read `.env`, or press Approve itself.
+
+Try it without a model: `node scripts/mcp-demo.js` (mock), or `node scripts/mcp-demo.js --arc` (real test USDC on Arc).
+
+## Approve on the dashboard
+
+![The dashboard during the offline demo: spent today $0.10 of $1.00, 8 paid, 2 stopped, and a $0.30 payment for /report waiting with Approve and Deny buttons](docs/img/dashboard.png)
+
+The dashboard is a live page on `http://localhost:4400`. It shows the budget, every decision with its reasons and a link to its transaction, and an Approve or Deny card with a countdown for each flagged payment. It answers only on localhost, and an approval is accepted only from the page itself (same Origin, loopback peer, JSON body). It has light and dark themes, works on phones, and is checked with [Mantis](https://github.com/vulinh1704/mantis) (`scripts/check-dashboard.sh`: 0 errors and 0 warnings on mobile and desktop, light and dark).
+
+```
+node demo/agent.js --dashboard           # the offline demo, paced for watching; /report waits for your answer
+```
+
+## Install and test
+
+```
+npm install
+npm test                                 # 174 tests, offline: no network, no keys
+node demo/agent.js                       # offline demo, mock payments
+```
+
+You need Node 20.19 or later. The Circle Wallets rail needs Node 22, as Circle's SDK does. The testnet demos read keys from `.env`, which is git-ignored, and the setup scripts write them there. Testnet tokens have no value. Never point the scripts at mainnet.
+
+| Demo | Needs |
+|---|---|
+| `node demo/agent.js --arc` | `node scripts/arc-testnet-wallet.js`, then test USDC from https://faucet.circle.com |
+| `node demo/agent.js --arc-x402` | the above, plus `node scripts/arc-facilitator.js` |
+| `node demo/agent.js --gateway` | the above, plus `node scripts/gateway-deposit.js 1` |
+| `node demo/agent.js --near` | `node scripts/near-testnet-account.js` and `node scripts/near-demo-payees.js` |
+
+Add `--dashboard` to any of them to watch on the live page.
+
+## Use it as a library
 
 ```js
 import { Guard, payingFetch } from '@vulinh1704/spend-guard';
-import { NearRail } from '@vulinh1704/spend-guard/rails/near';
+import { ArcRail } from '@vulinh1704/spend-guard/rails/arc';
+import { GatewayRail } from '@vulinh1704/spend-guard/rails/gateway';
 
 const guard = new Guard({
-  policy: { networks: ['near-testnet'], dailyUsd: 5, perPaymentUsd: 1, askAboveUsd: 0.25, services: { 'api.example.com': { payTo: ['pay.example.testnet'] } } },
-  rails: [new NearRail({ accountId: process.env.NEAR_ACCOUNT_ID, privateKey: process.env.NEAR_PRIVATE_KEY })],
-  approve: async (intent, verdict) => askTheHuman(verdict.reasons),
+  policy: {
+    networks: ['arc-testnet', 'arc-testnet-gateway'],
+    dailyUsd: 5, perPaymentUsd: 1, askAboveUsd: 0.25, spikeRatio: 5, unknownService: 'ask',
+    services: { 'api.example.com': { payTo: ['0xPayeeAddress'], maxUsd: 0.5 } },
+  },
+  rails: [new ArcRail({ privateKey: process.env.ARC_PRIVATE_KEY }), new GatewayRail({ privateKey: process.env.ARC_PRIVATE_KEY })],
+  approve: async (intent, verdict) => askTheHuman(verdict.reasons), // never the model
 });
 
-const res = await payingFetch(guard, 'https://api.example.com/data');
+const res = await payingFetch(guard, 'https://api.example.com/data'); // pays a 402 through the guard
 ```
 
-The UI of the dashboard is checked with [Mantis](https://github.com/vulinh1704/mantis) (`scripts/check-dashboard.sh`).
+`payingFetch` throws `GuardRefused` with the reasons when the guard says no. `Approvals` is the queue the dashboard and the MCP server use for `approve`. The package isn't published yet, so for now install it from a clone (`npm install /path/to/spend-guard`).
 
-Requires Node 20 or later. MIT licensed.
+## Docs
+
+- [Architecture](docs/architecture.md): one paid request, step by step.
+- [Policy reference](docs/policy.md): every field, rule and message.
+- [Rails](docs/rails.md): each rail, what the paywall checks, and how to write one.
+- [Circle Wallets](docs/circle-wallets.md): setup, and Circle's controls next to the guard's.
+- [Threat model](docs/threat-model.md): what it stops, what it can't, and the known gaps.
+- [CHANGELOG](CHANGELOG.md), [CONTRIBUTING](CONTRIBUTING.md), [SECURITY](SECURITY.md).
+
+## Roadmap
+
+Not built yet. This is the order I plan to build them in:
+
+1. **Circle Wallets live.** Run the rail against Circle's testnet with a developer account, then offer it in the MCP server, so an agent pays from a wallet whose key never leaves Circle.
+2. **Settle through Circle instead of my own settler.** Use Circle's facilitator for x402 `exact` on Arc where it is available, and Gateway on more chains from the same deposit.
+3. **Close the known gaps.** Count gas in the budgets, keep Gateway's unsettled count across restarts, and accept smart-wallet payers (ERC-1271), such as Circle SCA wallets, whose gas Circle's Gas Station can sponsor.
+4. **Publish.** npm package, a listing in the MCP registry, and a hosted policy and approvals page for teams.
+5. **Mainnet,** only after an external review of the guard and the rails.
+
+## License
+
+MIT
