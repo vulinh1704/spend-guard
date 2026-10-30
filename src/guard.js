@@ -5,8 +5,9 @@ import { DEFAULT_POLICY, evaluate } from './policy.js';
 /**
  * @typedef {object} Receipt
  * @property {string} network
- * @property {string} txid
- * @property {object} proof  What the paywall needs to see to release the resource (sent in X-PAYMENT).
+ * @property {string} [txid]  A signed payment (x402 exact, Gateway) may have none until settled.
+ * @property {object} proof  What the paywall needs to see to release the resource (sent in
+ *   PAYMENT-SIGNATURE, or X-PAYMENT for x402 v1).
  * @property {object} [settlement]  The paywall's x402 settlement, once it has reported one.
  */
 

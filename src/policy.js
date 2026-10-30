@@ -26,7 +26,9 @@ import { assetOf, formatUsd, toMicroUsd, usdToMicro } from './money.js';
  * @property {bigint} amount  Atomic units of `asset`.
  * @property {string} payTo
  * @property {string} [description]
- * @property {object} [offer]  x402 v2: the `accepts` entry being paid. Policy ignores it; the rail signs against it.
+ * @property {object} [offer]  x402: the `accepts` entry being paid, as the server sent it. Policy
+ *   ignores it; a rail that signs reads the scheme's details from it.
+ * @property {import('./x402.js').Offer} [x402]  The same offer read one way for x402 v1 and v2.
  */
 
 /**
