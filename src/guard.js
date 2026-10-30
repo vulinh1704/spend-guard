@@ -13,6 +13,8 @@ import { DEFAULT_POLICY, evaluate } from './policy.js';
  * @typedef {object} Rail  Moves money on one network. The guard is the only caller.
  * @property {string} network
  * @property {(intent: import('./policy.js').Intent) => Promise<Receipt>} pay
+ * @property {(offer: object) => {asset: string, amount: bigint, payTo: string} | null} [terms]
+ *   x402 v2: what paying this `accepts` entry would cost, or null if the rail can't pay it.
  */
 
 /** Thrown when a payment is denied by policy or declined by the human. */
