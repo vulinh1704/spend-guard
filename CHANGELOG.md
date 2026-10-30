@@ -22,6 +22,10 @@ Planned for this release. Items marked *in progress* are still being built on th
 
 - Deep imports such as `spend-guard/src/rails/near.js` no longer resolve, because the package now has an `exports` map. Import `@vulinh1704/spend-guard/rails/near` instead.
 
+### Fixed
+
+- The demo paywall takes a txid before it checks the payment on chain, so the same proof sent twice at once buys one call, not two.
+
 ## 0.1.0 - 2026-10-30
 
 First version, on `main`. Not published to npm.
