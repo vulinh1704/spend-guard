@@ -5,6 +5,7 @@
 import assert from 'node:assert/strict';
 import { after, before, describe, test } from 'node:test';
 import { setTimeout as sleep } from 'node:timers/promises';
+import { GATEWAY_AUTH_VALIDITY_WINDOW_SECONDS } from '@circle-fin/x402-batching/client';
 import { formatUnits } from 'viem';
 import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts';
 import { createGatewaySeller } from '../demo/gateway-seller.js';
@@ -68,6 +69,13 @@ describe('Gateway rail', () => {
     assert.deepEqual([a.from, a.to, a.value], [AGENT, PAYEES.weather, '10000']);
     assert.ok(Number(a.validBefore) - Date.now() / 1000 >= WEEK);
     assert.equal(await checkGatewayAuthorization(receipt.proof, offer), null);
+  });
+
+  test('signs the shortest validity Gateway accepts, however long the paywall asks for', async () => {
+    // An authorization valid for years would be the payee's to settle whenever it liked.
+    const { proof } = await railWith().pay(intentFor({ ...offer, maxTimeoutSeconds: 10 * 365 * DAY }));
+    const validFor = Number(proof.authorization.validBefore) - Date.now() / 1000;
+    assert.ok(validFor >= WEEK && validFor <= GATEWAY_AUTH_VALIDITY_WINDOW_SECONDS, `valid for ${validFor} s`);
   });
 
   test('signs version 2 offers under the domain that binds the token', async () => {
