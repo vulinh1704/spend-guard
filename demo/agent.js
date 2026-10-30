@@ -4,8 +4,12 @@
  *
  *   node demo/agent.js                 # mock payments, offline
  *   node demo/agent.js --near          # real NEAR testnet transfers (needs .env, see scripts/)
+ *   node demo/agent.js --dashboard     # also serves the live page on DASHBOARD_PORT (default 4400),
+ *                                      # paces the calls for watching, and stays up until Ctrl+C
  */
 import { existsSync } from 'node:fs';
+import { setTimeout as sleep } from 'node:timers/promises';
+import { createDashboard } from './dashboard.js';
 import { createPaidApi, PAYEES } from './paid-api.js';
 import { Guard, GuardRefused } from '../src/guard.js';
 import { formatUsd } from '../src/money.js';
@@ -54,8 +58,22 @@ const guard = new Guard({
   },
 });
 
+const withDashboard = process.argv.includes('--dashboard');
+let dashboard;
+if (withDashboard) {
+  const port = Number(process.env.DASHBOARD_PORT ?? 4400);
+  dashboard = createDashboard(guard, {
+    account: near ? `${rail.accountId} · NEAR testnet` : 'mock payments · offline',
+    explorer: near ? (txid) => `https://testnet.nearblocks.io/txns/${txid}` : undefined,
+  });
+  await new Promise((resolve) => dashboard.listen(port, resolve));
+  console.log(`dashboard on http://localhost:${port}; starting in 3s`);
+  await sleep(3000);
+}
+
 if (near) console.log(dim(`agent ${rail.accountId} paying on NEAR testnet\n`));
 for (const name of PLAN) {
+  if (withDashboard) await sleep(1200);
   try {
     const res = await payingFetch(guard, `${base}/${name}`);
     const paid = guard.ledger.entries.at(-1);
@@ -69,3 +87,4 @@ for (const name of PLAN) {
 
 console.log(dim(`\nspent today ${formatUsd(guard.ledger.spentToday(Date.now()))} of $1.00; ${guard.ledger.entries.filter((e) => e.status !== 'paid').length} payments stopped`));
 paywall.close();
+if (dashboard) console.log(dim('dashboard stays up; Ctrl+C to stop'));
