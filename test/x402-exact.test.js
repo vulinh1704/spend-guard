@@ -275,6 +275,12 @@ describe('x402 v2 with the exact scheme, through the guard', () => {
     assert.equal(guard.ledger.entries[0].receipt.txid, settled.txid);
     assert.deepEqual(reported, guard.ledger.entries);
     assert.equal(guard.ledger.spentToday(Date.now()), 30_000n);
+
+    // Another process on the same file (an MCP server, say) joins each settlement to its entry too.
+    const other = new Ledger({ file });
+    other.sync();
+    assert.deepEqual(other.entries.map((e) => [e.id, e.receipt.txid, e.receipt.settlement.success]), [[paid.id, settled.txid, true], [unpaid.id, undefined, false]]);
+    assert.equal(other.spentToday(Date.now()), 30_000n);
   });
 
   test('the v1 body is still there for transfer-proof clients', async () => {
