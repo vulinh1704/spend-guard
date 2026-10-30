@@ -62,7 +62,7 @@ const rail = new ArcRail({ privateKey: process.env.ARC_PRIVATE_KEY });
 - Pays USDC on Circle's Arc testnet (chain id `5042002`, RPC `https://rpc.testnet.arc.network`, explorer `https://testnet.arcscan.app`) with an ERC-20 `transfer` on the USDC contract at `0x3600000000000000000000000000000000000000` (6 decimals). It refuses any asset but `usdc`.
 - Waits for the receipt and throws if the transfer reverted.
 - Proof: `{ txid, sender }`.
-- `checkArcPayment(publicClient, proof, { payTo, amount })` is the paywall's side. It reads the receipt's USDC `Transfer` events from `sender` to `payTo` and adds them up, so a forged proof gets nothing.
+- `checkArcPayment(publicClient, proof, { payTo, amount })` is the paywall's side. It reads the receipt's USDC `Transfer` events from `sender` to `payTo` and adds them up, so a made-up proof gets nothing. Like `checkNearPayment`, it does not check who sends the proof or how old the transfer is, so the paywall must accept each txid once. See the [known gaps](threat-model.md#known-gaps).
 - Gas on Arc is paid in USDC, from the same balance. The guard's budgets count the payment, not the gas.
 - Setup: `scripts/arc-testnet-wallet.js` writes a fresh agent key and payee addresses to `.env`. Fund the agent with test USDC at https://faucet.circle.com (Arc Testnet).
 

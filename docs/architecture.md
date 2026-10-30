@@ -74,7 +74,7 @@ Every outcome (`paid`, `denied`, `declined`, `failed`) is written to the ledger 
 - **A refusal explains itself in full.** All rules run and every one that fired is returned. The human sees the whole picture, not only the first problem.
 - **Payments are serialized.** `Guard.pay` runs through a promise queue, so two parallel tool calls cannot both pass the daily budget check before either is recorded.
 - **Rails are dumb.** A rail only moves money and returns proof. It holds no policy, and the guard is its only caller.
-- **The paywall verifies on chain.** The demo paywall reads the transaction from the chain (`checkNearPayment`, `checkArcPayment`) and refuses a proof it has already accepted, so a forged or replayed proof gets nothing.
+- **The paywall verifies on chain.** The demo paywall reads the transaction from the chain (`checkNearPayment`, `checkArcPayment`), so a made-up proof gets nothing. It accepts each txid once and takes it before the check, so two copies of one proof sent at once buy one call. The proof is not tied to who sends it, though: see the [known gaps](threat-model.md#known-gaps).
 
 ## Where the boundary is
 
