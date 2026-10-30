@@ -93,8 +93,8 @@ export function assetKey(network, asset) {
 /**
  * fetch() that pays 402 paywalls through `guard`. Other responses pass through untouched, and so
  * does a 402 to a request that already carries a payment: paying again would pay twice. After a
- * paid retry, `receipt.settlement` holds the server's settlement and `receipt.txid` its
- * transaction, when the rail did not have one already.
+ * paid retry, the server's settlement is recorded on the paid entry (`guard.settled`):
+ * `receipt.settlement`, and `receipt.txid` when the rail did not have one already.
  *
  * @param {import('./guard.js').Guard} guard
  * @param {string} url
@@ -133,15 +133,14 @@ export async function payingFetch(guard, url, init = {}, { fetch = globalThis.fe
   }
   const res = await fetch(url, { ...init, headers });
 
-  const settled = res.headers.get('payment-response') ?? res.headers.get('x-payment-response');
-  if (settled) {
-    try {
-      receipt.settlement = decodePayment(settled);
-      if (receipt.settlement.success && receipt.settlement.transaction) receipt.txid ??= receipt.settlement.transaction;
-    } catch {
-      // A garbled receipt header must not cost the agent the response it paid for.
-    }
+  const header = res.headers.get('payment-response') ?? res.headers.get('x-payment-response');
+  let settlement;
+  try {
+    settlement = header && decodePayment(header);
+  } catch {
+    // A garbled receipt header must not cost the agent the response it paid for.
   }
+  if (settlement && typeof settlement === 'object') guard.settled(receipt, settlement);
   return res;
 }
 

@@ -7,6 +7,7 @@ import { DEFAULT_POLICY, evaluate } from './policy.js';
  * @property {string} network
  * @property {string} txid
  * @property {object} proof  What the paywall needs to see to release the resource (sent in X-PAYMENT).
+ * @property {object} [settlement]  The paywall's x402 settlement, once it has reported one.
  */
 
 /**
@@ -28,7 +29,8 @@ export class GuardRefused extends Error {
 /**
  * Sits between the agent and its wallets. The agent asks the guard to pay; the guard checks the
  * policy, asks a human when the policy says so, pays through the matching rail and records the
- * outcome. Emits 'entry' for every recorded decision (the dashboard listens to it).
+ * outcome. Emits 'entry' for every recorded decision (the dashboard listens to it) and 'settled'
+ * when a paywall reports how a paid entry settled.
  */
 export class Guard extends EventEmitter {
   /**
@@ -98,6 +100,19 @@ export class Guard extends EventEmitter {
       this.#record({ ...base, status: 'failed', error: err.message });
       throw err;
     }
+  }
+
+  /**
+   * Records the settlement a paywall reported for a payment, on the entry that holds `receipt`.
+   *
+   * @param {Receipt} receipt  As pay() returned it.
+   * @param {object} settlement  x402's SettleResponse.
+   */
+  settled(receipt, settlement) {
+    const entry = this.ledger.entries.findLast((e) => e.receipt === receipt);
+    if (!entry) return;
+    this.ledger.settle(entry, settlement, this.now());
+    this.emit('settled', entry);
   }
 
   #record(entry) {
