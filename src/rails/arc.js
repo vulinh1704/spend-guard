@@ -19,8 +19,9 @@ export const ARC_USDC_DOMAIN = { name: 'USDC', version: '2' };
 /**
  * Pays in USDC on Arc from the agent's own key, in one of two ways. An x402 'exact' offer that
  * names its EIP-712 domain gets an EIP-3009 authorization: signed here, settled (and its gas paid)
- * by the paywall. Anything else gets a plain ERC-20 transfer. Like every rail, the key should hold
- * only what the agent may spend.
+ * by the paywall. A payment with no offer, or a v1 offer without the domain (the demo paywall that
+ * checks transfers), gets a plain ERC-20 transfer. A v2 offer without the domain gets neither.
+ * Like every rail, the key should hold only what the agent may spend.
  */
 export class ArcRail {
   /**
@@ -46,6 +47,8 @@ export class ArcRail {
   async pay(intent) {
     if (intent.asset !== 'usdc') throw new Error(`ArcRail pays in USDC; ${intent.resource} asked for ${intent.asset}`);
     if (signsFor(intent.x402)) return this.#authorize(intent, intent.x402);
+    // v2 has no payload for a transfer proof: the paywall would keep the money and refuse the call.
+    if (intent.x402?.x402Version === 2) throw new Error(`${intent.resource} sent an x402 v2 offer without the token's EIP-712 domain; nothing to sign, and a transfer would not be accepted`);
     const hash = await this.walletClient.writeContract({ address: ARC_USDC, abi: erc20Abi, functionName: 'transfer', args: [intent.payTo, intent.amount] });
     const receipt = await this.publicClient.waitForTransactionReceipt({ hash });
     if (receipt.status !== 'success') throw new Error(`USDC transfer ${hash} reverted`);

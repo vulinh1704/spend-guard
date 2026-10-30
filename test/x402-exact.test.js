@@ -276,6 +276,13 @@ describe('ArcRail signing', () => {
     await rail.pay(intent(offer({ x402Version: 1, extra: undefined })));
     assert.equal(sent.functionName, 'transfer');
   });
+
+  test('a v2 offer without an EIP-712 domain gets neither a transfer nor a signature', async () => {
+    const rail = railCountingSignatures();
+    await assert.rejects(rail.pay(intent(offer({ extra: undefined }))), /without the token's EIP-712 domain/);
+    await assert.rejects(rail.pay(intent(offer({ extra: { name: 'USDC' } }))), /without the token's EIP-712 domain/);
+    assert.equal(rail.signed, 0);
+  });
 });
 
 describe('EIP-3009 authorizations', () => {
@@ -395,9 +402,27 @@ describe('reading x402 offers', () => {
       requirement({ scheme: 'upto' }),
       requirement({ asset: OTHER_TOKEN }),
       requirement({ network: 'eip155:5042' }),
+      requirement({ extra: undefined }),
+      requirement({ extra: { name: 'USDC' } }),
     ];
-    assert.equal(pickRequirement([...skipped, arc], ['arc-testnet']), arc);
-    assert.equal(pickRequirement(skipped, ['arc-testnet']), null);
+    assert.equal(pickRequirement([...skipped, arc], ['arc-testnet'], 2), arc);
+    assert.equal(pickRequirement(skipped, ['arc-testnet'], 2), null);
+    // A v1 paywall may check a plain transfer instead, as the demo's does.
+    assert.equal(pickRequirement([requirement({ extra: undefined })], ['arc-testnet'], 1)?.network, ARC);
+  });
+
+  test('a v2 offer without the token\'s EIP-712 domain is refused before anything is signed or sent', async () => {
+    for (const extra of [undefined, {}, { name: 'USDC' }]) {
+      const offered = { ...v2, accepts: [{ ...requirement(), extra }] };
+      const sent = [];
+      const fakeFetch = async (url, init) => (sent.push(new Headers(init?.headers)), response402({}, { 'PAYMENT-REQUIRED': encodePayment(offered) }));
+      const rail = railCountingSignatures();
+      const guard = guardFor('x', rail);
+      await assert.rejects(payingFetch(guard, 'http://x/weather', {}, { fetch: fakeFetch }), /asks for exact 0x3600.* without its EIP-712 domain on arc-testnet/);
+      assert.equal(rail.signed, 0, `extra: ${JSON.stringify(extra)}`);
+      assert.equal(sent.length, 1, 'no PAYMENT-SIGNATURE was sent');
+      assert.equal(guard.ledger.entries.length, 0);
+    }
   });
 
   test('an offer the guard cannot pay says why, before the guard is asked', async () => {

@@ -107,8 +107,8 @@ export async function payingFetch(guard, url, init = {}, { fetch = globalThis.fe
   if (first.status !== 402 || headers.has('payment-signature') || headers.has('x-payment')) return first;
 
   const required = await readPaymentRequired(first, url);
-  const chosen = pickRequirement(required.accepts, guard.networks);
-  if (!chosen) throw new Error(cannotPay(url, required.accepts, guard.networks));
+  const chosen = pickRequirement(required.accepts, guard.networks, required.x402Version);
+  if (!chosen) throw new Error(cannotPay(url, required, guard.networks));
   const offer = toOffer(required, chosen, url);
 
   const receipt = await guard.pay({
@@ -172,22 +172,33 @@ export async function readPaymentRequired(res, url = res.url) {
 
 /**
  * The first option the guard can pay: on one of its networks, in a token it can price, in the
- * 'exact' scheme, settled by EIP-3009 authorization (or a plain transfer) rather than Permit2,
- * delegation or escrow. The server's order is its preference; the guard's policy, not the price,
- * decides afterwards whether that option is acceptable.
+ * 'exact' scheme, settled by EIP-3009 authorization (or, for a v1 paywall, a plain transfer)
+ * rather than Permit2, delegation or escrow. The server's order is its preference; the guard's
+ * policy, not the price, decides afterwards whether that option is acceptable.
  *
  * @param {Requirement[]} accepts
  * @param {string[]} networks  Network names, as in the policy.
+ * @param {1|2} [x402Version]  The offer's version; v2 takes no transfer proof.
  */
-export function pickRequirement(accepts, networks) {
-  return accepts.find((r) => networks.includes(networkName(r.network)) && payable(r)) ?? null;
+export function pickRequirement(accepts, networks, x402Version = 2) {
+  return accepts.find((r) => networks.includes(networkName(r.network)) && payable(r, x402Version)) ?? null;
 }
 
-/** @param {Requirement} r */
-function payable(r) {
+/** @param {Requirement} r  @param {1|2} x402Version */
+function payable(r, x402Version) {
   if (r.scheme !== 'exact' || assetKey(r.network, r.asset) === null) return false;
   const { assetTransferMethod = 'eip3009', paymentFlow = 'authorization' } = r.extra ?? {};
-  return assetTransferMethod === 'eip3009' && paymentFlow === 'authorization';
+  return assetTransferMethod === 'eip3009' && paymentFlow === 'authorization' && !(x402Version === 2 && lacksDomain(r));
+}
+
+/**
+ * An 'exact' EVM offer without the token's EIP-712 domain can't be signed. In v2 the signature is
+ * the only payload a paywall takes, so paying it any other way would lose the money.
+ *
+ * @param {Requirement} r
+ */
+function lacksDomain(r) {
+  return r.scheme === 'exact' && caip2(r.network).startsWith('eip155:') && !(r.extra?.name && r.extra?.version);
 }
 
 /**
@@ -213,15 +224,21 @@ function toOffer(required, r, url) {
   };
 }
 
-/** Why nothing in `accepts` can be paid, for the error message. */
-function cannotPay(url, accepts, networks) {
+/**
+ * Why nothing in the offer can be paid, for the error message.
+ *
+ * @param {string} url
+ * @param {PaymentRequired} required
+ * @param {string[]} networks
+ */
+function cannotPay(url, { accepts, x402Version }, networks) {
   const can = networks.join(', ') || 'nothing';
   const onOurs = accepts.filter((r) => networks.includes(networkName(r.network)));
   if (!onOurs.length) {
     const offered = [...new Set(accepts.map((r) => networkName(r.network)))].join(', ') || 'nothing';
     return `${url} asks for payment on ${offered}; this guard can pay on ${can}`;
   }
-  const what = onOurs.map((r) => `${r.scheme} ${r.asset}${r.extra?.assetTransferMethod ? ` via ${r.extra.assetTransferMethod}` : ''} on ${networkName(r.network)}`);
+  const what = onOurs.map((r) => `${r.scheme} ${r.asset}${r.extra?.assetTransferMethod ? ` via ${r.extra.assetTransferMethod}` : ''}${x402Version === 2 && lacksDomain(r) ? ' without its EIP-712 domain' : ''} on ${networkName(r.network)}`);
   return `${url} asks for ${what.join(', ')}; this guard pays the exact scheme in known tokens only`;
 }
 
