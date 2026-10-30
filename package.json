@@ -1,0 +1,18 @@
+{
+  "name": "spend-guard",
+  "version": "0.1.0",
+  "description": "A spending guard for AI agents that pay for things: budgets, payee allowlists and price-spike checks before any payment leaves the wallet. Works with HTTP 402 (x402) paywalls on NEAR, Bitcoin Cash and Concordium.",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "test": "node --test test/*.test.js",
+    "demo:api": "node demo/paid-api.js",
+    "demo:agent": "node demo/agent.js"
+  },
+  "license": "MIT"
+}
