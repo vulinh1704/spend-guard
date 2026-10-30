@@ -80,19 +80,20 @@ export class ToolInputError extends Error {}
  * @param {Guard} context.guard
  * @param {import('./approval.js').Approvals} [context.approvals]  Without it, flagged payments are declined.
  * @param {string} [context.dashboardUrl]  Where the user answers approvals. The agent may not fetch it.
- * @returns {(name: string, args?: object, progress?: (message: string) => void) => Promise<ToolResult>}
+ * @returns {(name: string, args?: object, call?: {progress?: (message: string) => void, signal?: AbortSignal}) => Promise<ToolResult>}
+ *   `signal` aborts when the client cancels the call: a payment not made by then is not made.
  */
 export function toolRunner({ guard, approvals, dashboardUrl }) {
   const dashboard = dashboardUrl ? new URL(dashboardUrl) : null;
 
-  async function payAndFetch(args, progress) {
+  async function payAndFetch(args, progress, signal) {
     const url = targetUrl(args.url);
     const method = args.method ?? 'GET';
     if (!METHODS.includes(method)) throw new ToolInputError(`method must be one of ${METHODS.join(', ')}`);
     if (args.body !== undefined && typeof args.body !== 'string') throw new ToolInputError('body must be a string');
     if (args.body !== undefined && method === 'GET') throw new ToolInputError('a GET request has no body');
     // Not followed, so the host the guard judges is always the host that asks for the money.
-    const init = { method, headers: requestHeaders(args.headers), body: args.body, redirect: 'manual' };
+    const init = { method, headers: requestHeaders(args.headers), body: args.body, redirect: 'manual', signal };
 
     // What the guard does for this URL while the call runs (one URL, so parallel calls rarely mix).
     const entries = [];
@@ -103,7 +104,9 @@ export function toolRunner({ guard, approvals, dashboardUrl }) {
       if (ask.intent.resource !== url) return;
       const where = dashboardUrl ? ` at ${dashboardUrl}` : '';
       progress(`Waiting for the user to approve ${formatUsd(ask.verdict.usd)} to ${ask.intent.payTo}${where}`);
-      // Progress keeps clients that time out quiet tool calls waiting while the user decides.
+      // A client that resets its timeout on progress (resetTimeoutOnProgress in the TypeScript SDK)
+      // keeps waiting while the user decides. Others give up at their own timeout, which cancels
+      // the call and withdraws the ask.
       heartbeat = setInterval(() => progress(`Still waiting for the user's approval (${Math.ceil((ask.expiresAt - Date.now()) / 1000)}s left)`), 10_000);
     };
     const onSettled = (s) => {
@@ -214,9 +217,9 @@ export function toolRunner({ guard, approvals, dashboardUrl }) {
     return text(lines.join('\n'));
   }
 
-  return async function run(name, args = {}, progress = () => {}) {
+  return async function run(name, args = {}, { progress = () => {}, signal } = {}) {
     try {
-      if (name === 'pay_and_fetch') return await payAndFetch(args, progress);
+      if (name === 'pay_and_fetch') return await payAndFetch(args, progress, signal);
       if (name === 'spending_status') return spendingStatus(args);
       if (name === 'spending_policy') return spendingPolicy();
       throw new ToolInputError(`unknown tool "${name}"`);
@@ -368,7 +371,8 @@ export function loadLedger(file) {
  */
 export async function serveMcp({ run, dashboardUrl, input = process.stdin, output = process.stdout }) {
   const send = (msg) => output.write(`${JSON.stringify({ jsonrpc: '2.0', ...msg })}\n`);
-  const cancelled = new Set();
+  /** Calls still running, by request id, so that a cancel stops the call and not just its answer. */
+  const running = new Map();
   const pending = new Set();
   const instructions = [
     'Spend Guard pays HTTP 402 (x402) paywalls for you within the budget and rules the user set. Use pay_and_fetch for any URL that may ask for payment; never pay another way.',
@@ -382,18 +386,23 @@ export async function serveMcp({ run, dashboardUrl, input = process.stdin, outpu
   async function call(id, params) {
     const tool = TOOLS.find((t) => t.name === params?.name);
     if (!tool) return send({ id, error: { code: -32602, message: `Unknown tool: ${params?.name}` } });
+    const controller = new AbortController();
+    const { signal } = controller;
+    running.set(id, controller);
     const token = params?._meta?.progressToken;
     let n = 0;
     const progress = (message) => {
-      if (token !== undefined && !cancelled.has(id)) send({ method: 'notifications/progress', params: { progressToken: token, progress: ++n, message } });
+      if (token !== undefined && !signal.aborted) send({ method: 'notifications/progress', params: { progressToken: token, progress: ++n, message } });
     };
     let result;
     try {
-      result = await run(tool.name, params.arguments ?? {}, progress);
+      result = await run(tool.name, params.arguments ?? {}, { progress, signal });
     } catch (err) {
       result = toolError(`spend-guard crashed: ${err?.message ?? err}`);
+    } finally {
+      running.delete(id);
     }
-    if (!cancelled.has(id)) send({ id, result });
+    if (!signal.aborted) send({ id, result });
   }
 
   function handle({ id, method, params }) {
@@ -419,7 +428,10 @@ export async function serveMcp({ run, dashboardUrl, input = process.stdin, outpu
       return undefined;
     }
     if (method === 'notifications/cancelled') {
-      if (params?.requestId !== undefined) cancelled.add(params.requestId);
+      // The client has given up (often its own timeout while the user decides): a payment it would
+      // never see the content of must not go out, so the call stops and its ask is withdrawn.
+      const reason = params?.reason ? `: ${params.reason}` : '';
+      running.get(params?.requestId)?.abort(new Error(`cancelled by the client${reason}`));
       return undefined;
     }
     if (!isRequest) return undefined; // other notifications (initialized, …) need no answer
@@ -439,5 +451,7 @@ export async function serveMcp({ run, dashboardUrl, input = process.stdin, outpu
       if (m && typeof m === 'object' && m.method) handle(m);
     }
   }
+  // The client is gone, and nobody is left to receive what the calls still running would pay for.
+  for (const controller of running.values()) controller.abort(new Error('the client went away'));
   await Promise.allSettled([...pending]);
 }

@@ -190,4 +190,23 @@ describe('dashboard approvals', () => {
     assert.deepEqual(seen, ['approved', 'denied', 'denied']);
     stream.close();
   });
+
+  test('an ask the agent stops waiting for leaves the page, and the feed says why it was not paid', async () => {
+    const stream = await events(`${base}/events`);
+    for (let i = 0; i < guard.ledger.entries.length; i++) await stream.next();
+    const agent = new AbortController();
+    const declined = assert.rejects(guard.pay(intent('pay.testnet', 0.3, '/report'), { signal: agent.signal }), (err) => err.status === 'declined');
+
+    const ask = await stream.next();
+    assert.equal(ask.event, 'ask');
+    agent.abort();
+    assert.deepEqual(await stream.next(), { event: 'settled', data: { id: ask.data.id, approved: false, by: 'cancelled' } });
+    const entry = (await stream.next()).data;
+    assert.equal(entry.status, 'declined');
+    assert.equal(entry.answer, null, 'not "no answer in time": the reason says what happened');
+    assert.equal(entry.reasons.at(-1), 'the agent stopped waiting, so nothing was paid');
+    assert.equal((await fromPage(base, ask.data.id, true)).status, 404);
+    await declined;
+    stream.close();
+  });
 });

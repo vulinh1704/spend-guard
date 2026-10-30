@@ -56,7 +56,8 @@ export function createDashboard(guard, { title = 'Spend Guard', account = '', ex
   guard.on('entry', (entry) => broadcast(sse(null, view(entry))));
   approvals?.on('asked', (ask) => broadcast(sse('ask', askView(ask))));
   approvals?.on('settled', ({ ask, approved, by }) => {
-    answers.set(ask.intent, approved ? 'approved' : by === 'human' ? 'denied' : 'timeout');
+    // When the agent stopped waiting, nobody answered: the entry's own reason says what happened.
+    if (by !== 'cancelled') answers.set(ask.intent, approved ? 'approved' : by === 'human' ? 'denied' : 'timeout');
     broadcast(sse('settled', { id: ask.id, approved, by }));
   });
 
@@ -360,7 +361,7 @@ function page({ title, account, daily, perPayment, askAbove, spike }) {
   events.addEventListener('settled', (event) => {
     const s = JSON.parse(event.data);
     const ask = asks.get(s.id);
-    if (ask) removeAsk(s.id, (s.by !== 'human' ? 'No answer in time: declined ' : s.approved ? 'Approved ' : 'Denied ') + ask.label);
+    if (ask) removeAsk(s.id, (s.by === 'cancelled' ? 'Withdrawn, the agent stopped waiting: ' : s.by !== 'human' ? 'No answer in time: declined ' : s.approved ? 'Approved ' : 'Denied ') + ask.label);
   });
   setInterval(tick, 1000);
 </script>
