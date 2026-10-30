@@ -13,7 +13,7 @@ agent ── payingFetch ── Guard ──────────────
 |---|---|---|---|
 | `transfer` | `createTransaction` for USDC (token id `ef87c8c3-…`), then `getTransaction` until `COMPLETE` | The tx hash and the wallet address. The demo paywall checks the USDC `Transfer` log with `checkArcPayment`. | The Circle wallet, in USDC (about 0.0013 USDC for an EOA transfer) |
 | `authorization` | `signTypedData` for an EIP-3009 `TransferWithAuthorization` | The x402 `exact` payload `{signature, authorization}`. Nothing is on chain until the paywall settles it. | The paywall's settler |
-| `auto` (default) | Picks per payment: an x402 `exact` offer with an EIP-712 domain is signed, anything else is paid by transfer | | |
+| `auto` (default) | Picks per payment: an x402 `exact` offer with USDC's EIP-712 domain is signed. No offer, or an x402 v1 offer without a domain (like the demo paywall's), is paid by transfer. Any other offer, such as a v2 `exact` offer without a domain or another scheme, is refused before Circle is asked, because a transfer would not unlock it. | | |
 
 The rail signs the amount and payee the guard approved, never the numbers in the 402 response. The EIP-712 domain is pinned to Arc testnet USDC (`USDC`, version `2`, chain 5042002, `0x3600…0000`), and it hashes to the contract's `DOMAIN_SEPARATOR`. A paywall that asks for a signature on another chain or token is refused. This matters because the same address holds real money on Arc mainnet (`eip155:5042`). Every signature Circle returns is recovered and compared with the wallet address before it is used. An authorization is valid for at most 300 seconds, or less if the paywall's `maxTimeoutSeconds` is shorter.
 
