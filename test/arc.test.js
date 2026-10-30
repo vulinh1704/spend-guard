@@ -96,4 +96,13 @@ describe('checkArcPayment', () => {
     assert.match(await checkArcPayment(clientWith({ status: 'reverted', logs: [] }), proof, expected), /did not succeed/);
     assert.match(await checkArcPayment(clientWith(new Error('not found')), proof, expected), /not found/);
   });
+
+  test('takes the hash only as 0x and 64 hex digits, so a paywall keying on it sees one spelling per payment', async () => {
+    const chain = { getTransactionReceipt: async () => assert.fail('the chain was asked') };
+    for (const txid of [`0X${HASH.slice(2)}`, HASH.slice(2), `${HASH}00`, HASH.slice(0, -2), ` ${HASH}`, 42, undefined]) {
+      assert.match(await checkArcPayment(chain, { ...proof, txid }, expected), /is not a transaction hash/, String(txid));
+    }
+    // Any letter case is the same hash: the paywall lowercases it before its replay check.
+    assert.equal(await checkArcPayment(clientWith({ status: 'success', logs: [transferLog()] }), { ...proof, txid: HASH.toUpperCase().replace('0X', '0x') }, expected), null);
+  });
 });

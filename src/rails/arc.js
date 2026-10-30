@@ -98,6 +98,9 @@ function signsFor(offer) {
  * @returns {Promise<string|null>}  null when the payment checks out, otherwise why not.
  */
 export async function checkArcPayment(client, proof, expected) {
+  // Arc's RPC also takes the hash without its 0x, or with 0X. Only this form, in any letter case, so
+  // a paywall that keys its replay check on the lowercased txid sees one key per payment.
+  if (typeof proof?.txid !== 'string' || !/^0x[0-9a-fA-F]{64}$/.test(proof.txid)) return `${proof?.txid} is not a transaction hash`;
   let receipt;
   try {
     receipt = await client.getTransactionReceipt({ hash: proof.txid });

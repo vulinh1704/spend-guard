@@ -107,17 +107,18 @@ export function createPaidApi({ network = 'near-testnet', asset = 'usdc', payees
 
       const { payload } = decodePayment(header);
       const txid = payload?.txid;
+      const key = txid && txKey(txid);
       // One payment buys one call: a replayed proof is refused even though it is genuine. The txid is
       // taken before the async check, so the same proof sent twice at once cannot buy two calls.
-      if (txid && used.has(txid)) return ask('payment already used');
-      if (txid) used.add(txid);
+      if (key && used.has(key)) return ask('payment already used');
+      if (key) used.add(key);
       const problem = await verify(payload, { payTo, amount }).catch((err) => {
-        used.delete(txid);
+        used.delete(key);
         throw err;
       });
       if (problem) {
         // Not paid (yet): free the txid, so the proof can be sent again once the chain has it.
-        used.delete(txid);
+        used.delete(key);
         return ask(problem);
       }
 
@@ -169,6 +170,18 @@ async function settleExact(exact, header, offer, used) {
   const settlement = await settleAuthorization(exact.publicClient, exact.walletClient, payment.payload, offer);
   const headers = { 'payment-response': encodePayment(settlement) };
   return settlement.success ? { headers: { ...headers, 'cache-control': 'private' } } : { error: settlement.errorReason, headers };
+}
+
+/**
+ * What a txid is remembered by. Arc's RPC finds a transaction by its hash in any letter case, and
+ * with or without its 0x, so each EVM hash gets one spelling: re-spelled, it must not pass for
+ * another payment. Other ids, such as NEAR's base58 hashes, are case-sensitive and stay as sent.
+ *
+ * @param {unknown} txid
+ */
+function txKey(txid) {
+  const hex = typeof txid === 'string' && /^(?:0x)?([0-9a-f]{64})$/i.exec(txid);
+  return hex ? `0x${hex[1].toLowerCase()}` : txid;
 }
 
 /** The client's `accepted` must be the offer itself; addresses may differ in case only. */
