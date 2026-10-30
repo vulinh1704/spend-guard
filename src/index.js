@@ -1,4 +1,5 @@
-export { Guard, GuardRefused } from './guard.js';
+export { Approvals } from './approval.js';
+export { Guard, GuardRefused, PaymentUnconfirmed } from './guard.js';
 export { Ledger } from './ledger.js';
 export { ASSETS, assetOf, formatUsd, toMicroUsd, usdToMicro } from './money.js';
 export { DEFAULT_POLICY, evaluate, priceKey } from './policy.js';

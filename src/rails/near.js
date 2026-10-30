@@ -1,4 +1,5 @@
-import { Account, JsonRpcProvider } from 'near-api-js';
+import { Account, actions, baseEncode, JsonRpcProvider } from 'near-api-js';
+import { PaymentUnconfirmed } from '../guard.js';
 
 export const NEAR_RPC = {
   'near-testnet': 'https://test.rpc.fastnear.com',
@@ -27,7 +28,26 @@ export class NearRail {
   /** @param {import('../policy.js').Intent} intent */
   async pay(intent) {
     if (intent.asset !== 'near') throw new Error(`NearRail pays in NEAR; ${intent.resource} asked for ${intent.asset}`);
-    const outcome = await this.account.transfer({ receiverId: intent.payTo, amount: intent.amount });
+    // The signer keeps the transaction's id: once signed it may be sent, so an error from then on
+    // (an RPC timeout, say) does not mean nothing was paid, only that it is not confirmed.
+    const { signer } = this.account;
+    let signed = null;
+    const keepId = {
+      getPublicKey: () => signer.getPublicKey(),
+      signTransaction: async (tx) => {
+        const result = await signer.signTransaction(tx);
+        signed = baseEncode(result.txHash);
+        return result;
+      },
+    };
+    let outcome;
+    try {
+      // A failure on chain comes back in the outcome, and is read below as a failure.
+      outcome = await this.account.signAndSendTransaction({ receiverId: intent.payTo, actions: [actions.transfer(intent.amount)], signer: keepId, throwOnFailure: false });
+    } catch (err) {
+      if (signed) throw new PaymentUnconfirmed(signed, err);
+      throw err;
+    }
     const failure = outcome.status?.Failure;
     if (failure) throw new Error(`NEAR transfer failed: ${JSON.stringify(failure)}`);
     const txid = outcome.transaction.hash;

@@ -11,7 +11,9 @@
  *   node demo/agent.js --gateway       # Circle Gateway nanopayments on Arc testnet (needs .env and a
  *                                      # Gateway deposit, see scripts/gateway-deposit.js)
  *   node demo/agent.js --dashboard     # also serves the live page on DASHBOARD_PORT (default 4400),
- *                                      # paces the calls for watching, and stays up until Ctrl+C
+ *                                      # paces the calls for watching, and stays up until Ctrl+C;
+ *                                      # a flagged payment waits there for Approve or Deny
+ *                                      # (declined after APPROVAL_TIMEOUT seconds, default 120)
  */
 import { existsSync } from 'node:fs';
 import { setTimeout as sleep } from 'node:timers/promises';
@@ -20,6 +22,7 @@ import { privateKeyToAccount } from 'viem/accounts';
 import { createDashboard } from './dashboard.js';
 import { createGatewaySeller } from './gateway-seller.js';
 import { createPaidApi, PAYEES } from './paid-api.js';
+import { Approvals } from '../src/approval.js';
 import { Guard, GuardRefused } from '../src/guard.js';
 import { formatUsd } from '../src/money.js';
 import { ARC_USDC, ArcRail, arcTestnet, checkArcPayment } from '../src/rails/arc.js';
@@ -28,7 +31,7 @@ import { MockRail } from '../src/rails/mock.js';
 import { checkNearPayment, NearRail } from '../src/rails/near.js';
 import { payingFetch } from '../src/x402.js';
 
-const PLAN = ['weather', 'news', 'quotes', 'quotes', 'quotes', 'quotes', 'maps', 'maps', 'maps', 'weather'];
+const PLAN = ['weather', 'news', 'quotes', 'quotes', 'quotes', 'quotes', 'maps', 'maps', 'maps', 'weather', 'report'];
 
 const color = (code) => (s) => (process.stdout.isTTY ? `\x1b[${code}m${s}\x1b[0m` : s);
 const green = color(32);
@@ -84,6 +87,10 @@ const { rail, payees, label, paywall, explorer, balance } = setUp(mode);
 await new Promise((resolve) => paywall.listen(0, '127.0.0.1', resolve));
 const base = `http://127.0.0.1:${paywall.address().port}`;
 
+const withDashboard = process.argv.includes('--dashboard');
+// With the dashboard a flagged payment waits for a click there; without it the demo answers no.
+const approvals = withDashboard ? new Approvals({ timeoutMs: Number(process.env.APPROVAL_TIMEOUT ?? 120) * 1000 }) : null;
+
 const guard = new Guard({
   policy: {
     networks: [rail.network],
@@ -95,16 +102,20 @@ const guard = new Guard({
   },
   rails: [rail],
   approve: async (intent, verdict) => {
-    console.log(yellow(`  ? asks you: ${verdict.reasons.map((r) => r.message).join('; ')} → no`));
-    return false;
+    const why = verdict.reasons.map((r) => r.message).join('; ');
+    if (!approvals) {
+      console.log(yellow(`  ? asks you: ${why} → no`));
+      return false;
+    }
+    console.log(yellow(`  ? waiting for your answer on the dashboard: ${why}`));
+    return approvals.ask(intent, verdict);
   },
 });
 
-const withDashboard = process.argv.includes('--dashboard');
 let dashboard;
 if (withDashboard) {
   const port = Number(process.env.DASHBOARD_PORT ?? 4400);
-  dashboard = createDashboard(guard, { account: label, explorer });
+  dashboard = createDashboard(guard, { account: label, explorer, approvals });
   await new Promise((resolve) => dashboard.listen(port, resolve));
   console.log(`dashboard on http://localhost:${port}; starting in 3s`);
   await sleep(3000);
