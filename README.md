@@ -13,14 +13,15 @@ The guard pays HTTP 402 paywalls in the x402 style: the server answers 402 with 
 | Rail | Status |
 |---|---|
 | Mock (offline demo, tests) | works |
-| NEAR testnet | works: real transfers, and the paywall verifies each one on chain |
+| NEAR testnet | works: real NEAR transfers, and the paywall verifies each one on chain |
+| Arc testnet (Circle) | works: real USDC transfers, and the paywall checks each receipt's USDC Transfer event |
 | Bitcoin Cash, Concordium | planned |
 
 ## Try it
 
 ```
 npm install
-npm test                                 # 29 tests
+npm test                                 # 34 tests
 node demo/agent.js                       # offline, mock payments
 node demo/agent.js --dashboard           # live page on http://localhost:4400
 ```
@@ -40,7 +41,15 @@ node scripts/near-demo-payees.js         # paywall account and payees, incl. the
 node demo/agent.js --near --dashboard    # real testnet transfers, each verified on chain
 ```
 
-`.env` is git-ignored. Testnet NEAR has no value. Never point the scripts at mainnet.
+### On Arc testnet (USDC)
+
+```
+node scripts/arc-testnet-wallet.js       # agent key and payee addresses in .env; prints the agent address
+                                         # fund it with test USDC at https://faucet.circle.com (Arc Testnet)
+node demo/agent.js --arc --dashboard     # real USDC transfers, each checked against its receipt
+```
+
+`.env` is git-ignored. Testnet tokens have no value. Never point the scripts at mainnet.
 
 ## Use it in an agent
 
