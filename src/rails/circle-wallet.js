@@ -1,5 +1,8 @@
 import { randomBytes, randomUUID } from 'node:crypto';
-import { formatUnits, getAddress, getTypesForEIP712Domain, isAddress, isAddressEqual, recoverTypedDataAddress, serializeTypedData, toHex } from 'viem';
+import {
+  formatUnits, getAddress, getTypesForEIP712Domain, hexToBigInt, isAddress, isAddressEqual, numberToHex, parseSignature, recoverTypedDataAddress,
+  serializeSignature, serializeTypedData, toHex,
+} from 'viem';
 import { assetOf } from '../money.js';
 import { ARC_USDC, arcTestnet } from './arc.js';
 
@@ -121,9 +124,14 @@ export class CircleWalletRail {
     const data = serializeTypedData({ ...typed, types: { EIP712Domain: getTypesForEIP712Domain({ domain: this.domain }), ...typed.types } });
     const res = await this.client.signTypedData({ walletId: this.walletId, data, memo: `x402 ${intent.host}: ${intent.description ?? intent.resource}`.slice(0, 100) });
 
-    let signature = res.data?.signature;
-    if (!signature) throw new Error(`Circle returned no signature for ${intent.resource}`);
-    if (!signature.startsWith('0x')) signature = `0x${signature}`;
+    const returned = res.data?.signature;
+    if (!returned) throw new Error(`Circle returned no signature for ${intent.resource}`);
+    let signature;
+    try {
+      signature = canonical(returned.startsWith('0x') ? returned : `0x${returned}`);
+    } catch (err) {
+      throw new Error(`Circle returned a malformed signature for ${intent.resource}`, { cause: err });
+    }
     // A smart-contract wallet's signature or a domain mix-up would be rejected by USDC; catch it here.
     const signer = await recoverTypedDataAddress({ ...typed, signature });
     if (!isAddressEqual(signer, this.address)) throw new Error(`Circle's signature recovers to ${signer}, not the wallet ${this.address}`);
@@ -158,6 +166,20 @@ export class CircleWalletRail {
     if (!same) throw new Error(`${intent.resource} wants an authorization for ${extra.name} ${extra.version} at ${option.asset} on ${option.network}; this wallet signs only for ${this.domain.name} ${this.domain.version} on chain ${this.domain.chainId}`);
     return option;
   }
+}
+
+const SECP256K1_N = 0xfffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364141n;
+
+/**
+ * The same signature in the form USDC's ECRecover accepts: v 27 or 28 and s in the lower half of the
+ * curve order. Both v 0/1 and a high s recover to the same signer, but USDC reverts on them.
+ *
+ * @param {`0x${string}`} signature
+ */
+function canonical(signature) {
+  const { r, s, yParity } = parseSignature(signature);
+  if (hexToBigInt(s) <= SECP256K1_N / 2n) return serializeSignature({ r, s, yParity });
+  return serializeSignature({ r, s: numberToHex(SECP256K1_N - hexToBigInt(s), { size: 32 }), yParity: 1 - yParity });
 }
 
 /**

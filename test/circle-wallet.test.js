@@ -14,7 +14,7 @@ import { join } from 'node:path';
 import { describe, test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
-import { getTypesForEIP712Domain, hashDomain, recoverTypedDataAddress } from 'viem';
+import { getTypesForEIP712Domain, hashDomain, hexToBigInt, numberToHex, parseSignature, recoverTypedDataAddress, serializeSignature } from 'viem';
 import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts';
 import { createPaidApi } from '../demo/paid-api.js';
 import { Guard } from '../src/guard.js';
@@ -36,7 +36,7 @@ const intent = { resource: 'https://api.example/weather', host: 'api.example', n
 const offer = { scheme: 'exact', network: 'eip155:5042002', amount: '10000', asset: ARC_USDC, payTo: PAYEE, maxTimeoutSeconds: 60, extra: { name: 'USDC', version: '2' } };
 
 /** Shaped like Circle's SDK: every call resolves to {data}; signTypedData signs the JSON it gets. */
-function fakeClient({ fail, state = 'COMPLETE', id = 'tx-1', signer = account, prefix = true, hang = false } = {}) {
+function fakeClient({ fail, state = 'COMPLETE', id = 'tx-1', signer = account, prefix = true, tweak = (sig) => sig, hang = false } = {}) {
   const calls = [];
   return {
     calls,
@@ -49,7 +49,7 @@ function fakeClient({ fail, state = 'COMPLETE', id = 'tx-1', signer = account, p
     },
     signTypedData: async (input) => {
       calls.push(['signTypedData', input]);
-      const signature = await signer.signTypedData(JSON.parse(input.data));
+      const signature = tweak(await signer.signTypedData(JSON.parse(input.data)));
       return { data: { signature: prefix ? signature : signature.slice(2) } };
     },
   };
@@ -131,6 +131,22 @@ describe('Circle wallet rail: EIP-3009 authorizations', () => {
     await assert.rejects(rail(fakeClient({ signer: other }), { mode: 'authorization' }).pay(intent), /recovers to .*not the wallet/);
     const receipt = await rail(fakeClient({ prefix: false }), { mode: 'authorization' }).pay(intent);
     assert.match(receipt.proof.signature, /^0x[0-9a-f]{130}$/);
+  });
+
+  test('a valid signature USDC\'s ECRecover would refuse (v 0/1, high s) comes back in the form it accepts', async () => {
+    const N = 0xfffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364141n; // secp256k1's order
+    const tweaks = {
+      'v as 0/1': (sig) => sig.slice(0, -2) + (parseInt(sig.slice(-2), 16) - 27).toString(16).padStart(2, '0'),
+      'high s': (sig) => {
+        const { r, s, yParity } = parseSignature(sig);
+        return serializeSignature({ r, s: numberToHex(N - hexToBigInt(s), { size: 32 }), yParity: 1 - yParity });
+      },
+    };
+    for (const [label, tweak] of Object.entries(tweaks)) {
+      const receipt = await rail(fakeClient({ tweak }), { mode: 'authorization' }).pay(intent);
+      // The key signs deterministically (RFC 6979) with low s and v 27/28: the same bytes must come back.
+      assert.equal(receipt.proof.signature, await account.signTypedData(typedOf(receipt.proof)), label);
+    }
   });
 
   test('every authorization gets a fresh nonce', async () => {
