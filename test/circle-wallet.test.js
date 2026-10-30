@@ -17,7 +17,7 @@ import { promisify } from 'node:util';
 import { getTypesForEIP712Domain, hashDomain, hexToBigInt, numberToHex, parseSignature, recoverTypedDataAddress, serializeSignature } from 'viem';
 import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts';
 import { createPaidApi } from '../demo/paid-api.js';
-import { Guard } from '../src/guard.js';
+import { Guard, PaymentPending } from '../src/guard.js';
 import { ARC_USDC } from '../src/rails/arc.js';
 import {
   ARC_TESTNET_USDC_DOMAIN, ARC_TESTNET_USDC_TOKEN_ID, CircleWalletRail, circleClientFromEnv, circleWalletRailFromEnv, TRANSFER_WITH_AUTHORIZATION,
@@ -35,27 +35,38 @@ const intent = { resource: 'https://api.example/weather', host: 'api.example', n
 /** What a v2 paywall offers for USDC on Arc testnet (x402 'exact', EIP-3009). */
 const offer = { scheme: 'exact', network: 'eip155:5042002', amount: '10000', asset: ARC_USDC, payTo: PAYEE, maxTimeoutSeconds: 60, extra: { name: 'USDC', version: '2' } };
 
-/** Shaped like Circle's SDK: every call resolves to {data}; signTypedData signs the JSON it gets. */
-function fakeClient({ fail, state = 'COMPLETE', id = 'tx-1', signer = account, prefix = true, tweak = (sig) => sig, hang = false } = {}) {
+/** Never settles, like a request to Circle that stalls: the SDK passes no signal to its requests. */
+const STALL = new Promise(() => {});
+
+/**
+ * Shaped like Circle's SDK: every call resolves to {data}; signTypedData signs the JSON it gets.
+ * getTransaction answers with `polls` in turn (the last one repeats): a state, a transaction, or an
+ * error to throw. The calls named in `stall` never answer.
+ */
+function fakeClient({ polls = ['COMPLETE'], id = 'tx-1', signer = account, prefix = true, tweak = (sig) => sig, stall = [] } = {}) {
   const calls = [];
+  const call = (name, input, answer) => (calls.push([name, input]), stall.includes(name) ? STALL : answer());
+  let poll = 0;
   return {
     calls,
-    createTransaction: async (input) => (calls.push(['createTransaction', input]), { data: id ? { id, state: 'INITIATED' } : {} }),
-    getTransaction: async (input) => {
-      calls.push(['getTransaction', input]);
-      if (hang) await new Promise((_, reject) => input.signal.addEventListener('abort', () => reject(input.signal.reason)));
-      if (fail) throw new Error(`Transaction ${input.id} ${fail}`);
-      return { data: { transaction: { id: input.id, state, txHash: state === 'COMPLETE' ? HASH : undefined } } };
-    },
-    signTypedData: async (input) => {
-      calls.push(['signTypedData', input]);
+    createTransaction: (input) => call('createTransaction', input, async () => ({ data: id ? { id, state: 'INITIATED' } : {} })),
+    getTransaction: (input) => call('getTransaction', input, async () => {
+      const next = polls[Math.min(poll++, polls.length - 1)];
+      if (next instanceof Error) throw next;
+      const tx = typeof next === 'string' ? { state: next } : next;
+      return { data: { transaction: { id: input.id, ...(tx.state === 'COMPLETE' && { txHash: HASH }), ...tx } } };
+    }),
+    signTypedData: (input) => call('signTypedData', input, async () => {
       const signature = tweak(await signer.signTypedData(JSON.parse(input.data)));
       return { data: { signature: prefix ? signature : signature.slice(2) } };
-    },
+    }),
   };
 }
 
-const rail = (client, options = {}) => new CircleWalletRail({ client, walletId: 'w-1', address: ADDRESS, now: () => NOW, ...options });
+/** Shaped like the SDK's HttpResponseError; its HttpRequestError (no answer at all) has no status. */
+const httpError = (status, message) => Object.assign(new Error(message), { status });
+
+const rail = (client, options = {}) => new CircleWalletRail({ client, walletId: 'w-1', address: ADDRESS, now: () => NOW, pollMs: 1, ...options });
 const signedData = (client) => JSON.parse(client.calls.find(([name]) => name === 'signTypedData')[1].data);
 const typedOf = ({ authorization: a }) => ({
   domain: ARC_TESTNET_USDC_DOMAIN, types: { TransferWithAuthorization: TRANSFER_WITH_AUTHORIZATION }, primaryType: 'TransferWithAuthorization',
@@ -72,9 +83,7 @@ describe('Circle wallet rail: transfers', () => {
       walletId: 'w-1', tokenId: ARC_TESTNET_USDC_TOKEN_ID, destinationAddress: PAYEE, amount: ['0.01'],
       fee: { type: 'level', config: { feeLevel: 'MEDIUM' } }, idempotencyKey: 'x', refId: 'api.example',
     });
-    assert.equal(polled.id, 'tx-1');
-    assert.equal(polled.waitForState, 'COMPLETE');
-    assert.ok(polled.signal instanceof AbortSignal);
+    assert.deepEqual(polled, { id: 'tx-1' });
     assert.deepEqual(receipt, { network: 'arc-testnet', txid: HASH, proof: { txid: HASH, sender: ADDRESS }, circle: { transactionId: 'tx-1' } });
   });
 
@@ -86,11 +95,58 @@ describe('Circle wallet rail: transfers', () => {
     }
   });
 
-  test('a transfer Circle denies, drops or never finishes is an error, not a receipt', async () => {
-    await assert.rejects(rail(fakeClient({ fail: 'DENIED (SCREENING)' })).pay(intent), /Circle transaction tx-1 .*DENIED \(SCREENING\)/);
-    await assert.rejects(rail(fakeClient({ id: null })).pay(intent), /did not accept/);
-    await assert.rejects(rail(fakeClient({ state: 'CONFIRMED' })).pay(intent), /ended CONFIRMED/);
-    await assert.rejects(rail(fakeClient({ hang: true }), { timeoutMs: 20 }).pay(intent), /still pending after 0.02s; check it in Circle/);
+  test('a transfer Circle refuses, denies, fails or cancels is a plain failure: no money moved', async () => {
+    const cases = [
+      [{ state: 'DENIED', errorReason: 'SCREENING' }, /Circle transaction tx-1 for \S+ ended DENIED \(SCREENING\)$/],
+      [{ state: 'FAILED', errorReason: 'INSUFFICIENT_TOKEN', errorDetails: 'not enough USDC' }, /ended FAILED \(INSUFFICIENT_TOKEN\): not enough USDC$/],
+      ['CANCELLED', /ended CANCELLED$/],
+    ];
+    for (const [poll, error] of cases) {
+      const err = await rail(fakeClient({ polls: ['INITIATED', 'SENT', poll] })).pay(intent).catch((e) => e);
+      assert.match(err.message, error);
+      assert.ok(!(err instanceof PaymentPending), err.message);
+    }
+    await assert.rejects(rail(fakeClient({ id: null })).pay(intent), (err) => /did not accept/.test(err.message) && !(err instanceof PaymentPending));
+  });
+
+  test('a moment of trouble while waiting is asked again: no answer, rate limit, server error', async () => {
+    const reset = Object.assign(new Error('socket hang up'), { code: 'ECONNRESET' });
+    const client = fakeClient({ polls: [httpError(503, 'service unavailable'), reset, httpError(429, 'too many requests'), 'SENT', 'COMPLETE'] });
+    const receipt = await rail(client).pay(intent);
+    assert.equal(receipt.txid, HASH);
+    assert.equal(client.calls.filter(([name]) => name === 'getTransaction').length, 5);
+  });
+
+  test('a transfer that may still complete is pending with Circle\'s id, not failed', async () => {
+    const cases = [
+      [{ polls: ['STUCK'] }, /is STUCK/],
+      [{ polls: [{ state: 'COMPLETE', txHash: undefined }] }, /is COMPLETE without a tx hash/],
+      [{ polls: ['CONFIRMED'] }, /is still pending after 0.05s;/],
+      [{ polls: [httpError(503, 'service unavailable')] }, /is still pending after 0.05s \(last error: service unavailable\)/],
+      [{ polls: [httpError(404, 'not found')] }, /could not be checked \(not found\)/],
+      [{ stall: ['getTransaction'] }, /is still pending after 0.05s;/],
+    ];
+    for (const [options, error] of cases) {
+      const err = await rail(fakeClient(options), { timeoutMs: 50 }).pay(intent).catch((e) => e);
+      assert.ok(err instanceof PaymentPending, err.message);
+      assert.match(err.message, /^Circle transaction tx-1 for https:\/\/api\.example\/weather /);
+      assert.match(err.message, error);
+      assert.match(err.message, /it may still complete, so check it in Circle before paying again$/);
+      assert.deepEqual(err.receipt, { network: 'arc-testnet', circle: { transactionId: 'tx-1' } });
+    }
+  });
+
+  test('timeoutMs bounds every call to Circle, even one that never answers', async () => {
+    const started = Date.now();
+    const stalled = fakeClient({ stall: ['createTransaction'] });
+    const sent = await rail(stalled, { timeoutMs: 50 }).pay(intent).catch((e) => e);
+    assert.ok(sent instanceof PaymentPending, 'Circle may have taken the transfer without answering');
+    assert.match(sent.message, /Circle did not answer the transfer request for \S+ within 0.05s; it may still be sent/);
+    assert.deepEqual(sent.receipt, { network: 'arc-testnet', circle: { idempotencyKey: stalled.calls[0][1].idempotencyKey } });
+    const signing = await rail(fakeClient({ stall: ['signTypedData'] }), { timeoutMs: 50, mode: 'authorization' }).pay(intent).catch((e) => e);
+    assert.ok(!(signing instanceof PaymentPending), 'a signature the agent never got moves nothing');
+    assert.match(signing.message, /Circle did not sign the authorization for \S+ within 0.05s/);
+    assert.ok(Date.now() - started < 1000, `took ${Date.now() - started}ms`);
   });
 
   test('only USDC is paid on this rail', async () => {
@@ -257,10 +313,17 @@ describe('Circle wallet rail behind the guard', () => {
   });
 
   test('a transfer Circle\'s screening denies is recorded as failed with Circle\'s reason', async () => {
-    const { res, entries } = await run(fakeClient({ fail: 'DENIED (SCREENING)' }));
+    const { res, entries } = await run(fakeClient({ polls: [{ state: 'DENIED', errorReason: 'SCREENING' }] }));
     assert.match(res.message, /DENIED/);
     assert.deepEqual(entries.map((e) => e.status), ['failed']);
     assert.match(entries[0].error, /DENIED \(SCREENING\)/);
+  });
+
+  test('a transfer that may still complete is recorded as pending and counts against the budget', async () => {
+    const { res, entries } = await run(fakeClient({ polls: ['STUCK'] }));
+    assert.ok(res instanceof PaymentPending);
+    assert.deepEqual(entries.map((e) => [e.status, e.usd, e.receipt.circle.transactionId]), [['pending', 10_000n, 'tx-1']]);
+    assert.match(entries[0].error, /check it in Circle before paying again/);
   });
 });
 
@@ -298,10 +361,17 @@ describe('Circle wallet rail from the environment', () => {
   });
 });
 
-/** A local stand-in for Circle's API, enough for the calls the rail makes. */
-function fakeCircleApi(signer) {
+/**
+ * A local stand-in for Circle's API, enough for the calls the rail makes. The first polls of
+ * transaction tx-1 can answer with an HTTP error status, or 'stall' and never answer.
+ *
+ * @param {{address: string, signTypedData: Function}} signer
+ * @param {{polls?: (number|'stall')[]}} [options]
+ */
+function fakeCircleApi(signer, { polls = [] } = {}) {
   const { publicKey } = generateKeyPairSync('rsa', { modulusLength: 2048, publicKeyEncoding: { type: 'spki', format: 'pem' }, privateKeyEncoding: { type: 'pkcs8', format: 'pem' } });
   const requests = [];
+  let poll = 0;
   const server = http.createServer(async (req, res) => {
     let body = '';
     for await (const chunk of req) body += chunk;
@@ -316,7 +386,12 @@ function fakeCircleApi(signer) {
     if (route === 'GET /v1/w3s/wallets/w-1') return reply(200, { wallet });
     if (route === 'GET /v1/w3s/wallets/w-1/balances') return reply(200, { tokenBalances: [{ amount: '1.5', token: { id: ARC_TESTNET_USDC_TOKEN_ID, symbol: 'USDC', decimals: 6 } }] });
     if (route === 'POST /v1/w3s/developer/transactions/transfer') return reply(201, { id: 'tx-1', state: 'INITIATED' });
-    if (route === 'GET /v1/w3s/transactions/tx-1') return reply(200, { transaction: { id: 'tx-1', state: 'COMPLETE', txHash: HASH } });
+    if (route === 'GET /v1/w3s/transactions/tx-1') {
+      const answer = polls[poll++] ?? 200;
+      if (answer === 'stall') return;
+      if (answer !== 200) return res.writeHead(answer, { 'content-type': 'application/json' }).end(JSON.stringify({ code: answer, message: 'service unavailable' }));
+      return reply(200, { transaction: { id: 'tx-1', state: 'COMPLETE', txHash: HASH } });
+    }
     if (route === 'POST /v1/w3s/developer/sign/typedData') return reply(200, { signature: await signer.signTypedData(JSON.parse(json.data)) });
     res.writeHead(404, { 'content-type': 'application/json' }).end(JSON.stringify({ code: 156001, message: 'not found' }));
   });
@@ -327,13 +402,14 @@ const nodeMajor = Number(process.versions.node.split('.')[0]);
 const SETUP = fileURLToPath(new URL('../scripts/circle-wallet-setup.js', import.meta.url));
 
 describe('Circle wallet rail with Circle\'s SDK', { skip: nodeMajor < 22 && 'the Circle SDK needs Node 22+' }, () => {
-  async function withApi(fn) {
-    const { server, requests } = fakeCircleApi(account);
+  async function withApi(fn, options) {
+    const { server, requests } = fakeCircleApi(account, options);
     await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
     const env = { CIRCLE_API_KEY: 'TEST_API_KEY:key-id:key-secret', CIRCLE_ENTITY_SECRET: randomBytes(32).toString('hex'), CIRCLE_BASE_URL: `http://127.0.0.1:${server.address().port}` };
     try {
       await fn(env, requests);
     } finally {
+      server.closeAllConnections(); // a stalled poll keeps its socket open
       server.close();
     }
   }
@@ -395,4 +471,20 @@ describe('Circle wallet rail with Circle\'s SDK', { skip: nodeMajor < 22 && 'the
     assert.equal(JSON.parse(sign.body.data).domain.verifyingContract, ARC_USDC);
     assert.equal(await recoverTypedDataAddress({ ...typedOf(signed.proof), signature: signed.proof.signature }), ADDRESS);
   }));
+
+  const sdkRail = async (env, options) => new CircleWalletRail({ client: await circleClientFromEnv(env), walletId: 'w-1', address: ADDRESS, pollMs: 10, ...options });
+
+  test('a poll the SDK fails with HTTP 503 is asked again', () => withApi(async (env, requests) => {
+    const paid = await (await sdkRail(env)).pay(intent);
+    assert.equal(paid.txid, HASH);
+    assert.equal(requests.filter((q) => q.path === '/v1/w3s/transactions/tx-1').length, 2);
+  }, { polls: [503] }));
+
+  test('a poll that never answers is given up on at timeoutMs, as pending', () => withApi(async (env) => {
+    const started = Date.now();
+    const err = await (await sdkRail(env, { timeoutMs: 300 })).pay(intent).catch((e) => e);
+    assert.ok(err instanceof PaymentPending, err.message);
+    assert.match(err.message, /Circle transaction tx-1 .* is still pending after 0.3s/);
+    assert.ok(Date.now() - started < 2000, `took ${Date.now() - started}ms`);
+  }, { polls: ['stall'] }));
 });

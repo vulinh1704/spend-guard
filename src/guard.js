@@ -26,6 +26,23 @@ export class GuardRefused extends Error {
 }
 
 /**
+ * Thrown by a rail when money may have left but the rail can't tell, such as a transfer still
+ * pending when it stopped waiting. The guard records it as 'pending', which counts against the
+ * budget like 'paid': paying again must not go past the budget if the first one went through.
+ */
+export class PaymentPending extends Error {
+  /**
+   * @param {string} message  Says where to check before paying again.
+   * @param {object} receipt  What is known so far, such as the provider's transaction id.
+   * @param {ErrorOptions} [options]
+   */
+  constructor(message, receipt, options) {
+    super(message, options);
+    this.receipt = receipt;
+  }
+}
+
+/**
  * Sits between the agent and its wallets. The agent asks the guard to pay; the guard checks the
  * policy, asks a human when the policy says so, pays through the matching rail and records the
  * outcome. Emits 'entry' for every recorded decision (the dashboard listens to it).
@@ -95,7 +112,8 @@ export class Guard extends EventEmitter {
       this.#record({ ...base, status: 'paid', receipt });
       return receipt;
     } catch (err) {
-      this.#record({ ...base, status: 'failed', error: err.message });
+      if (err instanceof PaymentPending) this.#record({ ...base, status: 'pending', receipt: err.receipt, error: err.message });
+      else this.#record({ ...base, status: 'failed', error: err.message });
       throw err;
     }
   }
