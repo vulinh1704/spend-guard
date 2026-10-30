@@ -4,7 +4,10 @@
  * official MCP TypeScript SDK client (a dev dependency only), approval on the dashboard included.
  */
 import assert from 'node:assert/strict';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { spawn, spawnSync } from 'node:child_process';
+import { once } from 'node:events';
+import { existsSync } from 'node:fs';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
@@ -291,6 +294,43 @@ describe('mcp configuration', () => {
     const restarted = new Guard({ policy, rails: [new MockRail('near-testnet')], ledger: loadLedger(file) });
     assert.equal(restarted.ledger.spentToday(Date.now()), 800_000n);
     await assert.rejects(restarted.pay(intent(0.4)), (err) => err.reasons[0].code === 'daily-budget');
+  });
+
+  test('two servers on one ledger file share one daily budget', async () => {
+    const file = path.join(dir, 'shared', 'ledger.jsonl');
+    const src = (f) => new URL(`../src/${f}`, import.meta.url).href;
+    // The other server (another MCP client's): it reads the ledger first, then pays alongside this one.
+    const other = spawn(process.execPath, ['--input-type=module', '-e', `
+      import { once } from 'node:events';
+      import { Guard } from '${src('guard.js')}';
+      import { loadLedger } from '${src('mcp.js')}';
+      import { MockRail } from '${src('rails/mock.js')}';
+      const guard = new Guard({ policy: ${JSON.stringify(policy)}, rails: [new MockRail('near-testnet')], ledger: loadLedger(${JSON.stringify(file)}) });
+      const intent = { resource: 'https://api.example/data', host: 'api.example', network: 'near-testnet', asset: 'usdc', amount: 400000n, payTo: 'pay.testnet' };
+      process.stdout.write('ready\\n');
+      await once(process.stdin, 'data');
+      await Promise.allSettled([guard.pay(intent), guard.pay(intent), guard.pay(intent)]);
+    `]);
+    let stderr = '';
+    other.stderr.on('data', (d) => (stderr += d));
+    await once(other.stdout, 'data');
+
+    const guard = new Guard({ policy, rails: [new MockRail('near-testnet')], ledger: loadLedger(file) });
+    other.stdin.end('go\n');
+    await Promise.allSettled([guard.pay(intent(0.4)), guard.pay(intent(0.4)), guard.pay(intent(0.4))]);
+    assert.equal((await once(other, 'exit'))[0], 0, stderr);
+
+    const paid = (await readFile(file, 'utf8')).trim().split('\n').map((l) => JSON.parse(l)).filter((e) => e.status === 'paid');
+    assert.equal(paid.length, 2, 'a $1.00 day allows two payments of $0.40 across both servers');
+    assert.match(textOf(await toolRunner({ guard })('spending_status')), /^Spent today \(UTC\): \$0\.80 of the \$1\.00 daily budget/);
+  });
+
+  test('a ledger lock left by a process that died is taken over', { timeout: 3000 }, async () => {
+    const file = path.join(dir, 'stale.jsonl');
+    await writeFile(`${file}.lock`, String(spawnSync(process.execPath, ['-e', '']).pid));
+    const guard = new Guard({ policy, rails: [new MockRail('near-testnet')], ledger: loadLedger(file) });
+    await guard.pay(intent(0.1));
+    assert.equal(existsSync(`${file}.lock`), false, 'and released after the payment');
   });
 
   test('a ledger line that does not parse stops the server instead of under-counting', async () => {

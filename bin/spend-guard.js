@@ -16,7 +16,8 @@ Environment:
   SPEND_GUARD_POLICY            policy JSON file (default: no known services, so every payment asks you)
   SPEND_GUARD_RAILS             mock (default, pays nothing), near, arc, or a comma list
   SPEND_GUARD_MOCK_NETWORK      network the mock rail pretends to pay on (default near-testnet)
-  SPEND_GUARD_LEDGER            decisions file, read back on start (default ~/.spend-guard/ledger.jsonl; off)
+  SPEND_GUARD_LEDGER            decisions file, read back on start; servers on one file share one budget
+                                (default ~/.spend-guard/ledger.jsonl; off keeps it in memory)
   SPEND_GUARD_DASHBOARD_PORT    dashboard port on 127.0.0.1 (default 4400; 0 picks a free one; off: no
                                 dashboard, and payments that need your approval are declined)
   SPEND_GUARD_APPROVAL_TIMEOUT  seconds a payment waits for your answer before it is declined (default 55:
