@@ -66,7 +66,7 @@ export class GatewayRail {
    */
   terms(offer) {
     if (offer?.scheme !== 'exact' || offer.network !== GATEWAY_NETWORK || offer.extra?.name !== BATCHED) return null;
-    if (!sameAddress(offer.asset, GATEWAY_USDC)) return null;
+    if (!['1', '2'].includes(offer.extra.version) || !sameAddress(offer.asset, GATEWAY_USDC)) return null;
     // The paywall names the contract the signature is for; any other contract could be one that
     // pays it out on its own terms.
     if (!sameAddress(offer.extra.verifyingContract, GATEWAY_WALLET)) return null;

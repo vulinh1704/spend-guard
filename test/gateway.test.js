@@ -74,6 +74,7 @@ describe('Gateway rail', () => {
       'Arc mainnet': { ...offer, network: 'eip155:5042' },
       'EURC': { ...offer, asset: EURC },
       'a plain USDC offer': { ...offer, extra: { name: 'USDC', version: '2' } },
+      'an unknown domain version': { ...offer, extra: { ...offer.extra, version: '3' } },
       'another scheme': { ...offer, scheme: 'upto' },
       'a zero amount': { ...offer, amount: '0' },
       'a malformed payee': { ...offer, payTo: '0x1234' },
