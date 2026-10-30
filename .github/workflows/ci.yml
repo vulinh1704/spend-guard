@@ -1,0 +1,58 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    # Explicit bash adds -o pipefail, so a crash before `| tee` still fails the step.
+    shell: bash
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: test (Node ${{ matrix.node }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node: [20, 22, 24]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+      - run: npm ci
+      - run: npm test
+
+  demo:
+    # The offline demo is the README example: it must keep paying the honest endpoints and
+    # stopping the price spike and the payee swap. Mock payments only, so no secrets.
+    name: offline demo
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - name: Run the mock demo
+        run: node demo/agent.js | tee demo.log
+      - name: Check the guard stopped both bad payments
+        run: |
+          grep -q "is 40x the usual" demo.log
+          grep -q "rnaps.paywall.testnet, which is not one of its known addresses" demo.log
+          grep -q "2 payments stopped" demo.log
+      - name: Check the package contents
+        run: npm pack --dry-run
