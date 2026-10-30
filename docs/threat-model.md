@@ -24,7 +24,7 @@ The guard is a library in the agent's process. It is a boundary only if the mode
 | Injected detour | a page tells the agent to buy "premium data" from a new host | a human decides, or refused | `unknown-service` |
 | Wrong chain | a paywall only offers a network you did not allow | not paid | `network`, `payingFetch` |
 | Racing tool calls | three parallel $0.45 calls against a $1 budget | the third is refused | serialized `Guard.pay` |
-| Forged or replayed proof (paywall side) | a client sends a made-up txid, or reuses a real one | the paywall refuses it | `checkNearPayment`, `checkArcPayment`, replay check in the demo paywall |
+| Made-up or reused proof (paywall side) | a client sends a made-up txid, or a proof the paywall already accepted, even twice at once | the paywall refuses it | `checkNearPayment`, `checkArcPayment`, replay check in the demo paywall |
 
 Every decision, including the refusals, is in the ledger with its reasons, so you can audit what happened later.
 
@@ -47,6 +47,8 @@ These are gaps in the current code, not design limits:
 - **A payment that went through but errored.** If a rail throws after the transaction was sent (an RPC timeout while waiting for the receipt, for example), the entry is `failed` and does not count against the budget, although the money may have left.
 - **Non-stablecoin prices are fixed.** NEAR, BCH and CCD convert at constants in `ASSETS`, so dollar limits on them are approximate. USDC converts exactly.
 - **Payee addresses are compared as exact strings.** An EVM address in another letter case is refused as a swap. This fails safe, but list addresses in the form the paywall sends.
+- **A payment proof works for whoever sends it first.** The proof `{ txid, sender }` is public once the transfer is on chain, and nothing ties it to the agent or to the request. Someone who watches the chain can send it to the paywall before the agent does and get the call the agent paid for. The agent then gets `payment already used`, after its guard has already counted the payment. The x402 `exact` scheme on Arc (in progress) is meant to close this: the agent signs an EIP-3009 authorization with a fresh nonce and a deadline, sends it only to the paywall over HTTPS, and the paywall settles it once.
+- **The demo paywall's replay check lives in memory.** It accepts each txid once, but only while the process runs, and the chain checks do not look at how old a transfer is. After a restart, an earlier transfer from a sender to a payee can buy a call again. A real paywall should store the txids it accepted and refuse transfers older than its payment timeout.
 
 ## Running an agent with it
 
