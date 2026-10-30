@@ -1,6 +1,7 @@
 import { createPublicClient, createWalletClient, defineChain, encodeFunctionData, erc20Abi, http, isAddressEqual, keccak256, parseEventLogs } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
 import { PaymentUnconfirmed } from '../guard.js';
+import { takesTransfer } from '../x402.js';
 import { chainIdOf, signAuthorization } from './eip3009.js';
 
 /** Circle's Arc testnet: USDC is the gas token, and the USDC ERC-20 (6 decimals) lives at a fixed address. */
@@ -20,8 +21,8 @@ export const ARC_USDC_DOMAIN = { name: 'USDC', version: '2' };
 /**
  * Pays in USDC on Arc from the agent's own key, in one of two ways. An x402 'exact' offer that
  * names its EIP-712 domain gets an EIP-3009 authorization: signed here, settled (and its gas paid)
- * by the paywall. A payment with no offer, or a v1 offer without the domain (the demo paywall that
- * checks transfers), gets a plain ERC-20 transfer. A v2 offer without the domain gets neither.
+ * by the paywall. A payment with no offer, or an offer that takes a transfer (the demo paywalls'
+ * v1 offers, see takesTransfer), gets a plain ERC-20 transfer. Any other offer gets neither.
  * Like every rail, the key should hold only what the agent may spend.
  */
 export class ArcRail {
@@ -48,8 +49,8 @@ export class ArcRail {
   async pay(intent) {
     if (intent.asset !== 'usdc') throw new Error(`ArcRail pays in USDC; ${intent.resource} asked for ${intent.asset}`);
     if (signsFor(intent.x402)) return this.#authorize(intent, intent.x402);
-    // v2 has no payload for a transfer proof: the paywall would keep the money and refuse the call.
-    if (intent.x402?.x402Version === 2) throw new Error(`${intent.resource} sent an x402 v2 offer without the token's EIP-712 domain; nothing to sign, and a transfer would not be accepted`);
+    // A paywall that settles only signatures would keep the money and refuse the call.
+    if (intent.x402 && !takesTransfer(intent.x402)) throw new Error(`${intent.resource} sent an x402 offer without the token's EIP-712 domain; nothing to sign, and a transfer would not be accepted`);
     // Signed before it is sent, so the hash is known: once sent, an RPC error or the receipt wait
     // timing out does not mean nothing was paid, only that it is not confirmed yet.
     const data = encodeFunctionData({ abi: erc20Abi, functionName: 'transfer', args: [intent.payTo, intent.amount] });

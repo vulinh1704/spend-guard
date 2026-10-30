@@ -200,16 +200,29 @@ export async function readPaymentRequired(res, url = res.url) {
 
 /**
  * The first option the guard can pay: on one of its networks, in a token it can price, in the
- * 'exact' scheme, settled by EIP-3009 authorization (or, for a v1 paywall, a plain transfer)
- * rather than Permit2, delegation or escrow. The server's order is its preference; the guard's
- * policy, not the price, decides afterwards whether that option is acceptable.
+ * 'exact' scheme, settled by EIP-3009 authorization (or, for the demo paywalls, a plain transfer:
+ * see takesTransfer) rather than Permit2, delegation or escrow. The server's order is its
+ * preference; the guard's policy, not the price, decides afterwards whether that option is acceptable.
  *
  * @param {Requirement[]} accepts
  * @param {string[]} networks  Network names, as in the policy.
- * @param {1|2} [x402Version]  The offer's version; v2 takes no transfer proof.
+ * @param {1|2} [x402Version]  The offer's version.
  */
 export function pickRequirement(accepts, networks, x402Version = 2) {
   return accepts.find((r) => networks.includes(networkName(r.network)) && payable(r, x402Version)) ?? null;
+}
+
+/**
+ * Whether an offer is paid by a plain transfer, the transaction being the proof. Only the demo
+ * paywalls' x402 v1 offers are: they name an asset ('usdc') where a token contract would be, and
+ * no EIP-712 domain. A paywall that names the contract settles the 'exact' scheme's signed
+ * authorization and nothing else, in v1 as in v2: a transfer would move the money and still get a 402.
+ *
+ * @param {{x402Version?: number, asset?: string, extra?: Record<string, any>}} offer  An Offer, or
+ *   a Requirement with its version.
+ */
+export function takesTransfer({ x402Version, asset, extra }) {
+  return x402Version === 1 && Object.hasOwn(ASSETS, String(asset).toLowerCase()) && !(extra?.name || extra?.version);
 }
 
 /** @param {Requirement} r  @param {1|2} x402Version */
@@ -219,17 +232,18 @@ function payable(r, x402Version) {
   // A domain that names another contract (Circle Gateway's wallet, say) belongs to that contract's
   // scheme, not the token's own EIP-3009: only a rail that knows the scheme may sign for it.
   if (verifyingContract && String(verifyingContract).toLowerCase() !== String(r.asset).toLowerCase()) return false;
-  return assetTransferMethod === 'eip3009' && paymentFlow === 'authorization' && !(x402Version === 2 && lacksDomain(r));
+  return assetTransferMethod === 'eip3009' && paymentFlow === 'authorization' && !lacksDomain(r, x402Version);
 }
 
 /**
- * An 'exact' EVM offer without the token's EIP-712 domain can't be signed. In v2 the signature is
- * the only payload a paywall takes, so paying it any other way would lose the money.
+ * An 'exact' EVM offer without the token's EIP-712 domain can't be signed, and unless it takes a
+ * transfer, paying it any other way would lose the money.
  *
  * @param {Requirement} r
+ * @param {1|2} x402Version
  */
-function lacksDomain(r) {
-  return r.scheme === 'exact' && caip2(r.network).startsWith('eip155:') && !(r.extra?.name && r.extra?.version);
+function lacksDomain(r, x402Version) {
+  return r.scheme === 'exact' && caip2(r.network).startsWith('eip155:') && !(r.extra?.name && r.extra?.version) && !takesTransfer({ ...r, x402Version });
 }
 
 /**
@@ -269,7 +283,7 @@ function cannotPay(url, { accepts, x402Version }, networks) {
     const offered = [...new Set(accepts.map((r) => networkName(r.network)))].join(', ') || 'nothing';
     return `${url} asks for payment on ${offered}; this guard can pay on ${can}`;
   }
-  const what = onOurs.map((r) => `${r.scheme} ${r.asset}${r.extra?.assetTransferMethod ? ` via ${r.extra.assetTransferMethod}` : ''}${x402Version === 2 && lacksDomain(r) ? ' without its EIP-712 domain' : ''} on ${networkName(r.network)}`);
+  const what = onOurs.map((r) => `${r.scheme} ${r.asset}${r.extra?.assetTransferMethod ? ` via ${r.extra.assetTransferMethod}` : ''}${lacksDomain(r, x402Version) ? ' without its EIP-712 domain' : ''} on ${networkName(r.network)}`);
   return `${url} asks for ${what.join(', ')}; this guard pays the exact scheme in known tokens only`;
 }
 
