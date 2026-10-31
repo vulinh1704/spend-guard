@@ -260,7 +260,7 @@ describe('mcp tools', () => {
     const { run } = setUp('api.example:443');
     const text = textOf(await run('spending_policy', {}));
     assert.match(text, /^Pays on: near-testnet\.\nDaily budget \$1\.00; at most \$0\.50 per payment; the user approves payments above \$0\.25\./);
-    assert.match(text, /over 5x an endpoint's usual price is refused\. Services not listed below are paid only with the user's approval\./);
+    assert.match(text, /A price 5x an endpoint's usual price or more is refused\. Services not listed below are paid only with the user's approval\./);
     assert.match(text, /- api\.example:443: weather\.paywall\.testnet, news\.paywall\.testnet, quotes\.paywall\.testnet, maps\.paywall\.testnet/);
   });
 

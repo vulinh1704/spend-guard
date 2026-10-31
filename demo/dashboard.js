@@ -237,7 +237,7 @@ function page({ title, account, daily, perPayment, askAbove, spike }) {
     <div class="card"><div class="label">Paid</div><div class="value" id="paid">0</div></div>
     <div class="card"><div class="label">Stopped</div><div class="value" id="stopped">0</div></div>
   </section>
-  <p class="rules">At most ${escape(perPayment)} per payment · approval above ${escape(askAbove)} · known payees only · prices over ${escape(spike)}x the usual are refused</p>
+  <p class="rules">At most ${escape(perPayment)} per payment · approval above ${escape(askAbove)} · known payees only · prices ${escape(spike)}x the usual or more are refused</p>
   <section class="approvals" id="approvals" aria-labelledby="approvals-title" hidden>
     <h2 id="approvals-title">Needs your approval</h2>
     <ul class="asks" id="asks"></ul>

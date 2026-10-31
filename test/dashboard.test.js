@@ -4,6 +4,7 @@ import { after, before, describe, test } from 'node:test';
 import { createDashboard } from '../demo/dashboard.js';
 import { Approvals } from '../src/approval.js';
 import { Guard, GuardRefused, PaymentUnconfirmed } from '../src/guard.js';
+import { evaluate } from '../src/policy.js';
 import { MockRail } from '../src/rails/mock.js';
 
 const intent = (payTo, usd = 0.01, path = '/weather') => ({ resource: `https://api.example${path}`, host: 'api.example', network: 'near-testnet', asset: 'usdc', amount: BigInt(Math.round(usd * 1e6)), payTo });
@@ -77,6 +78,16 @@ describe('dashboard', () => {
     assert.match(html, /agent\.testnet/);
     assert.match(html, /At most \$1\.00 per payment/);
     assert.match(html, /<section class="approvals" id="approvals" aria-labelledby="approvals-title" hidden>/, 'the approval area starts hidden');
+  });
+
+  test('the rules line says a price at the spike ratio is refused, as the policy does', async () => {
+    const spiky = new Guard({ policy: { ...policy, spikeRatio: 3 }, rails: [new MockRail('near-testnet')] });
+    const page = createDashboard(spiky);
+    const html = await (await fetch(await listen(page))).text();
+    page.close();
+    assert.match(html, /prices 3x the usual or more are refused/);
+    const atRatio = evaluate(intent('pay.testnet', 0.03), spiky.policy, { spentTodayUsd: 0n, recentPricesUsd: [10_000n] });
+    assert.deepEqual(atRatio.reasons.map((r) => r.code), ['price-spike']);
   });
 
   test('a page opened late gets the history, then live entries', async () => {
