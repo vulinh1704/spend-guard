@@ -12,7 +12,7 @@ Status: testnet only, not audited, not on npm yet. MIT licensed.
 
 ## Quickstart (1 minute, offline)
 
-You need git and Node 20.19 or later. No keys and no wallet: the payments are mocked, and nothing leaves your machine after the install.
+You need git and Node 22.22.2 or later. No keys and no wallet: the payments are mocked, and nothing leaves your machine after the install.
 
 ```
 git clone https://github.com/vulinh1704/spend-guard
@@ -199,7 +199,7 @@ npm test                                 # 184 tests, offline: no network, no ke
 node demo/agent.js                       # offline demo, mock payments
 ```
 
-You need Node 20.19 or later. The Circle Wallets rail needs Node 22, as Circle's SDK does. The testnet demos read keys from `.env`, which is git-ignored, and the setup scripts write them there. Testnet tokens have no value. Never point the scripts at mainnet.
+You need Node 22.22.2 or later, because `near-api-js` 7 does (Circle's SDK needs Node 22). The testnet demos read keys from `.env`, which is git-ignored, and the setup scripts write them there. Testnet tokens have no value. Never point the scripts at mainnet.
 
 | Demo | Needs |
 |---|---|
