@@ -5,12 +5,12 @@ Thanks for helping. Issues and pull requests are welcome.
 ## Setup
 
 ```
-npm install
+npm ci
 npm test               # node:test, offline
 node demo/agent.js     # offline demo with mock payments
 ```
 
-You need Node 20.19 or later; the Circle Wallets rail needs Node 22, as Circle's SDK does (its tests skip on older versions). The NEAR, Arc and Gateway demos need testnet keys in `.env` (see the README). Tests never touch a network.
+You need Node 22.22.2 or later, because `near-api-js` 7 does (Circle's SDK needs Node 22). `engines.node` in `package.json` must stay at least what every runtime dependency declares, and `test/package.test.js` checks it against `package-lock.json`. The NEAR, Arc and Gateway demos need testnet keys in `.env` (see the README). Tests never touch a network.
 
 ## Style
 

@@ -18,14 +18,15 @@ On `main`, not published to npm yet.
 - The dashboard links a signed payment to its settlement transaction once the paywall reports it.
 - npm package `@vulinh1704/spend-guard`. The unscoped name `spend-guard` cannot be used on npm because it differs from the existing, unrelated `spendguard` package only by punctuation.
 - Rail entry points: `@vulinh1704/spend-guard/rails/<name>`, so an agent loads only the SDK of the chain it pays on.
-- Package metadata: `files` whitelist (`src/`, `bin/` and the dashboard ship), `sideEffects: false`, `engines.node >=20.19.0`, and the `spend-guard` command.
+- Package metadata: `files` whitelist (`src/`, `bin/` and the dashboard ship), `sideEffects: false`, `engines.node >=22.22.2`, and the `spend-guard` command.
 - MCP Registry entry: `server.json` for `io.github.vulinh1704/spend-guard` (npm, stdio, `npx @vulinh1704/spend-guard mcp`, every variable the server reads) and `mcpName` in `package.json`. Release steps in [docs/publishing.md](docs/publishing.md).
-- CI on GitHub Actions: tests on Node 20, 22 and 24, plus the offline demo, which must still stop the price spike and the payee swap and ask before the large payment.
+- CI on GitHub Actions: tests on Node 22.22.2 (the lowest `engines.node` admits), 24 and 26, plus the offline demo, which must still stop the price spike and the payee swap and ask before the large payment.
 - Docs: [architecture](docs/architecture.md), [policy reference](docs/policy.md), [rails](docs/rails.md) and [threat model](docs/threat-model.md); [SECURITY.md](SECURITY.md) and [CONTRIBUTING.md](CONTRIBUTING.md).
 - The demo paywall has a `/report` endpoint ($0.30) that is honest but needs approval.
 
 ### Changed
 
+- Needs Node 22.22.2 or later, because `near-api-js` 7.4 does (Circle's SDK needs 22). 0.1.0 said Node 20, where `npm install --engine-strict` refuses the package and a plain install warns. A test now checks `engines.node` against every runtime dependency in `package-lock.json`.
 - Deep imports such as `spend-guard/src/rails/near.js` no longer resolve, because the package now has an `exports` map. Import `@vulinh1704/spend-guard/rails/near` instead.
 - With a file, the ledger reads back what other processes appended before each decision, so a restart keeps today's spend and servers on one file share one budget. Each entry has an `id`.
 - `Guard.pay(intent, { signal })` is async and takes an abort signal: a payment not made by the time it aborts is not made. The `approve` callback gets the signal too.

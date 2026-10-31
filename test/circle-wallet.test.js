@@ -417,10 +417,9 @@ function fakeCircleApi(signer, { polls = [] } = {}) {
   return { server, requests };
 }
 
-const nodeMajor = Number(process.versions.node.split('.')[0]);
 const SETUP = fileURLToPath(new URL('../scripts/circle-wallet-setup.js', import.meta.url));
 
-describe('Circle wallet rail with Circle\'s SDK', { skip: nodeMajor < 22 && 'the Circle SDK needs Node 22+' }, () => {
+describe('Circle wallet rail with Circle\'s SDK', () => {
   async function withApi(fn, options) {
     const { server, requests } = fakeCircleApi(account, options);
     await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));

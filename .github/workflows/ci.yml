@@ -25,7 +25,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        node: [20, 22, 24]
+        # The lowest Node engines.node admits (near-api-js needs 22.22.2), and the later LTS lines.
+        node: ['22.22.2', 24, 26]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
