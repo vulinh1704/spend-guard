@@ -13,7 +13,10 @@
     "payments",
     "agent-security",
     "spending-limits",
-    "mcp"
+    "eip-3009",
+    "mcp",
+    "mcp-server",
+    "model-context-protocol"
   ],
   "homepage": "https://github.com/vulinh1704/spend-guard#readme",
   "bugs": {

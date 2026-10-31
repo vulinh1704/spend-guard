@@ -195,7 +195,7 @@ node demo/agent.js --dashboard           # the offline demo, paced for watching;
 
 ```
 npm install
-npm test                                 # 180 tests, offline: no network, no keys
+npm test                                 # 181 tests, offline: no network, no keys
 node demo/agent.js                       # offline demo, mock payments
 ```
 
