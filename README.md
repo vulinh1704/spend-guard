@@ -4,13 +4,13 @@
 
 ![An agent pays a paywall on Arc testnet. Spend Guard refuses a $0.40 price spike and a payment to an unknown address, then a $0.30 payment waits on the dashboard until a person clicks Approve.](docs/img/demo.gif)
 
-A real run on Arc testnet, sped up in places: the guard refuses a 40x price spike and a swapped payout address before anything is signed, and a $0.30 payment goes out only after a person clicks Approve on the dashboard.
+A real run on Arc testnet with x402 `exact` (`node demo/agent.js --arc-x402 --dashboard`), trimmed and sped up: the guard refuses a 40x price spike and a swapped payout address before anything is signed, and a $0.30 payment goes out only after a person clicks Approve on the dashboard.
 
-Agents are starting to pay per call over HTTP 402: the server answers `402 Payment Required` with a price, the agent pays and gets the data (the [x402](https://www.x402.org/) protocol). An agent that can pay can also be talked into paying: a prompt injection, a retry loop, or a paywall that raises its price or swaps its payout address. Spend Guard sits between the agent and its money. Every payment is checked against budgets, a payee allowlist and the endpoint's usual price, and anything unusual waits for a person to approve it. All of this happens before any USDC leaves and before any authorization is signed. It pays on Circle's Arc testnet by plain USDC transfer, by x402 `exact` (EIP-3009) and by Circle Gateway nanopayments, from a local key or a Circle developer-controlled wallet. Claude and other MCP clients can use it as an MCP server.
+Agents are starting to pay per call over HTTP 402: the server answers `402 Payment Required` with a price, the agent pays and gets the data (the [x402](https://www.x402.org/) protocol). An agent that can pay can also be talked into paying: a prompt injection, a retry loop, or a paywall that raises its price or swaps its payout address. Spend Guard sits between the agent and its money. Every payment is checked against budgets, a payee allowlist and the endpoint's usual price, and anything unusual waits for a person to approve it. All of this happens before any USDC leaves and before any authorization is signed. It pays on Circle's Arc testnet by plain USDC transfer, by x402 `exact` (EIP-3009) and by Circle Gateway nanopayments, from a local key, and in NEAR on NEAR testnet. A rail for Circle developer-controlled wallets is tested offline only. Claude and other MCP clients can use it as an MCP server.
 
 Status: testnet only, not audited, not on npm yet. MIT licensed.
 
-## Quickstart (1 minute, offline)
+## Quickstart (1 minute, no keys)
 
 You need git and Node 22.22.2 or later. No keys and no wallet: the payments are mocked, and nothing leaves your machine after the install.
 
@@ -59,7 +59,7 @@ agent wallet $17.999436 → $17.899436 USDC (-$0.10)
 | Budgets per payment, per day and per service | runaway loops, overpriced calls |
 | Payee allowlist per service | a paywall that starts asking to be paid somewhere else |
 | Price spike against the endpoint's usual price | a sudden 5x, 40x, 1000x |
-| Human approval above a threshold, or for an unknown service | large payments, detours an injected page suggests |
+| Human approval above a threshold, or for an unknown service | large payments, a payment to a host the policy doesn't list, such as one an injected page pointed the agent to |
 | One decision at a time (with a ledger file, across processes too) | parallel tool calls racing the daily budget |
 
 Every decision, paid or not, is recorded with its reasons. The rules and their exact messages are in [docs/policy.md](docs/policy.md).
@@ -143,6 +143,8 @@ From npm, once the package is published. The default `mock` rail pays nothing, s
 }
 ```
 
+The mock rail pretends to pay on `near-testnet`, so this policy must allow that network: list `"networks": ["near-testnet"]`, or leave `networks` out and the server allows the networks of the rails it runs. A policy that lists only Arc networks leaves the mock rail nothing it may pay. To have something to pay, run the demo paywall from a clone, `node demo/paid-api.js`, and ask the agent to fetch http://localhost:4402/weather. [`demo/mcp-policy.json`](demo/mcp-policy.json) is a mock policy that knows its payees.
+
 From a clone (this works today), and for the rails that pay. Node reads the keys from `.env` with `--env-file`, which npx can't pass on, so they stay out of the client's config:
 
 ```json
@@ -159,7 +161,7 @@ From a clone (this works today), and for the rails that pay. Node reads the keys
 
 Or in Claude Code: `claude mcp add spend-guard -- npx -y @vulinh1704/spend-guard mcp` once published, or from a clone `claude mcp add spend-guard --env SPEND_GUARD_POLICY=/abs/path/policy.json --env SPEND_GUARD_RAILS=arc -- node --env-file=/abs/path/spend-guard/.env /abs/path/spend-guard/bin/spend-guard.js mcp`
 
-`policy.json`:
+A `policy.json` for the `arc,gateway` config. Its `networks` are the ones those two rails pay on; with other rails, list theirs or leave `networks` out:
 
 ```json
 { "networks": ["arc-testnet", "arc-testnet-gateway"], "dailyUsd": 1, "perPaymentUsd": 0.5, "askAboveUsd": 0.25, "spikeRatio": 5, "unknownService": "ask",
@@ -169,9 +171,9 @@ Or in Claude Code: `claude mcp add spend-guard -- npx -y @vulinh1704/spend-guard
 | Variable | Meaning |
 |---|---|
 | `SPEND_GUARD_RAILS` | `mock` (default, pays nothing), `near`, `arc`, `gateway`, or a comma list |
-| `SPEND_GUARD_POLICY` | the policy file. Without one, every service is unknown, so every payment asks you. |
+| `SPEND_GUARD_POLICY` | the policy file. Without one, every service is unknown, so every payment asks you. Without `networks` in it, the networks of the rails you run are allowed. |
 | `SPEND_GUARD_LEDGER` | decisions file, read back on start, so a restart keeps today's spend. Servers on one file share one budget. Default `~/.spend-guard/ledger.jsonl`; `off` keeps it in memory. |
-| `SPEND_GUARD_DASHBOARD_PORT` | dashboard port on 127.0.0.1, default 4400. If it is taken, a free one is used and named on stderr. `off` means no dashboard, and flagged payments are declined. |
+| `SPEND_GUARD_DASHBOARD_PORT` | dashboard port on 127.0.0.1, default 4400; `0` picks a free one. If it is taken, a free one is used and named on stderr. `off` means no dashboard, and flagged payments are declined. |
 | `SPEND_GUARD_APPROVAL_TIMEOUT` | seconds a payment waits for you (default 55). Raise it together with your client's tool timeout. |
 | `SPEND_GUARD_MOCK_NETWORK` | the network the `mock` rail pretends to pay on (default `near-testnet`, which the demo paywall asks for) |
 | `ARC_PRIVATE_KEY` | for `arc` and `gateway`. Testnet keys only. |
@@ -194,8 +196,8 @@ node demo/agent.js --dashboard           # the offline demo, paced for watching;
 ## Install and test
 
 ```
-npm install
-npm test                                 # 184 tests, offline: no network, no keys
+npm ci
+npm test                                 # 189 tests, offline: no network, no keys
 node demo/agent.js                       # offline demo, mock payments
 ```
 

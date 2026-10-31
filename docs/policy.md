@@ -27,7 +27,7 @@ const guard = new Guard({
 
 | Field | Default | Meaning |
 |---|---|---|
-| `networks` | `[]` | Networks the agent may pay on, e.g. `arc-testnet`, `near-testnet`. Empty means nothing is allowed. |
+| `networks` | `[]` | Networks the agent may pay on, e.g. `arc-testnet`, `near-testnet`. Empty means nothing is allowed. `spend-guard mcp` fills it with its rails' networks when the policy file leaves it out. |
 | `dailyUsd` | `5` | Total the agent may spend per UTC day. |
 | `perPaymentUsd` | `1` | No single payment may cost more than this. |
 | `askAboveUsd` | `0.25` | Payments above this wait for a human yes. |

@@ -9,7 +9,9 @@ npm test                       # also run by prepublishOnly
 npm pack --dry-run             # src/, bin/, demo/dashboard.js, README, LICENSE, CHANGELOG: no tests, no .env, no GIF
 ```
 
-The version must be the same in three places: `version` in `package.json`, and `version` and `packages[0].version` in `server.json`. `test/package.test.js` fails when they differ, or when `server.json` misses a variable the server reads. Move the `Unreleased` section of the CHANGELOG to the version and date.
+The version must be the same in three places: `version` in `package.json`, and `version` and `packages[0].version` in `server.json`. `test/package.test.js` fails when they differ, when `server.json` misses a variable the server reads, or when `engines.node` admits a Node that a runtime dependency refuses (a published version's `engines` can't be changed). Move the `Unreleased` section of the CHANGELOG to the version and date.
+
+Publish from `main`, after the release branch is merged and pushed. The package leaves out `docs/img`, so npmjs.com loads the README's images from the GitHub repository's default branch, and shows them broken until they are there.
 
 ## 2. npm
 
