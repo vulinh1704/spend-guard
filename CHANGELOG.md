@@ -2,6 +2,14 @@
 
 All notable changes to this project are listed here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow [Semantic Versioning](https://semver.org/).
 
+## 0.2.1 - 2026-11-01
+
+Documentation only. No code changes.
+
+### Changed
+
+- README: says the package is on npm and in the MCP Registry (the status line, "Use it from Claude or any MCP client" and "Use it as a library"), and the roadmap no longer lists publishing. 0.2.0 went out with the README from before the release, which said it was not on npm yet.
+
 ## 0.2.0 - 2026-10-31
 
 ### Added

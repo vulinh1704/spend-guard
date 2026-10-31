@@ -1,6 +1,6 @@
 {
   "name": "@vulinh1704/spend-guard",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "mcpName": "io.github.vulinh1704/spend-guard",
   "description": "A spending guard for AI agents that pay for things: budgets, payee allowlists, price-spike checks and human approval before any payment leaves the wallet. Pays HTTP 402 (x402) paywalls in USDC on Circle's Arc and in NEAR.",
   "keywords": [
