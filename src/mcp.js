@@ -231,7 +231,7 @@ export function toolRunner({ guard, approvals, dashboardUrl, responseTimeoutMs =
     const lines = [
       `Pays on: ${guard.networks.join(', ') || 'nothing (no rail for the networks the policy allows)'}.`,
       `Daily budget ${usd(p.dailyUsd)}; at most ${usd(p.perPaymentUsd)} per payment; the user approves payments above ${usd(p.askAboveUsd)}.`,
-      `A price over ${p.spikeRatio}x an endpoint's usual price is refused. Services not listed below are ${p.unknownService === 'deny' ? 'refused' : 'paid only with the user\'s approval'}.`,
+      `A price ${p.spikeRatio}x an endpoint's usual price or more is refused. Services not listed below are ${p.unknownService === 'deny' ? 'refused' : 'paid only with the user\'s approval'}.`,
       '',
       Object.keys(p.services).length ? 'Known services and the addresses they may be paid at:' : 'No known services yet.',
       ...Object.entries(p.services).map(([host, s]) => `- ${host}: ${s.payTo.join(', ')}${s.maxUsd !== undefined ? `; at most ${usd(s.maxUsd)} per call` : ''}`),
