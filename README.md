@@ -8,7 +8,7 @@ A real run on Arc testnet with x402 `exact` (`node demo/agent.js --arc-x402 --da
 
 Agents are starting to pay per call over HTTP 402: the server answers `402 Payment Required` with a price, the agent pays and gets the data (the [x402](https://www.x402.org/) protocol). An agent that can pay can also be talked into paying: a prompt injection, a retry loop, or a paywall that raises its price or swaps its payout address. Spend Guard sits between the agent and its money. Every payment is checked against budgets, a payee allowlist and the endpoint's usual price, and anything unusual waits for a person to approve it. All of this happens before any USDC leaves and before any authorization is signed. It pays on Circle's Arc testnet by plain USDC transfer, by x402 `exact` (EIP-3009) and by Circle Gateway nanopayments, from a local key, and in NEAR on NEAR testnet. A rail for Circle developer-controlled wallets is tested offline only. Claude and other MCP clients can use it as an MCP server.
 
-Status: testnet only, not audited. On npm as [`@vulinh1704/spend-guard`](https://www.npmjs.com/package/@vulinh1704/spend-guard). MIT licensed.
+Status: testnet only, not audited. On npm as [`@vulinh1704/spend-guard`](https://www.npmjs.com/package/@vulinh1704/spend-guard) and in the official MCP Registry as `io.github.vulinh1704/spend-guard`. MIT licensed.
 
 ## Quickstart (1 minute, no keys)
 
@@ -251,7 +251,7 @@ Not built yet. This is the order I plan to build them in:
 1. **Circle Wallets live.** Run the rail against Circle's testnet with a developer account, then offer it in the MCP server, so an agent pays from a wallet whose key never leaves Circle.
 2. **Settle through Circle instead of my own settler.** Use Circle's facilitator for x402 `exact` on Arc where it is available, and Gateway on more chains from the same deposit.
 3. **Close the known gaps.** Count gas in the budgets, keep Gateway's unsettled count across restarts, and accept smart-wallet payers (ERC-1271), such as Circle SCA wallets, whose gas Circle's Gas Station can sponsor.
-4. **Publish.** The npm package and the MCP Registry entry (`server.json`) are ready to go out, as [docs/publishing.md](docs/publishing.md) describes. Then a hosted policy and approvals page for teams.
+4. **A hosted policy and approvals page for teams.**
 5. **Mainnet,** only after an external review of the guard and the rails.
 
 ## License
