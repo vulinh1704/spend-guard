@@ -42,6 +42,7 @@ On `main`, not published to npm yet.
 - `CircleWalletRail` in mode `transfer` ignored the paywall's offer and paid an x402 `exact` offer by transfer, which the paywall keeps while still answering 402; each retry paid again. It now refuses any offer that wants a signature before Circle is asked.
 - The demo paywalls' replay checks compared txids and Gateway nonces as sent, but Arc's RPC finds a transaction by its hash in any letter case and with or without `0x`, so one transfer could buy any number of calls. EVM hashes and nonces are now compared lowercased, and `checkArcPayment` takes only a `0x`-prefixed 32-byte hash.
 - The dashboard and `spending_policy` said a price over `spikeRatio` times the usual is refused, but the policy refuses one at exactly that ratio too. They now say "5x the usual or more".
+- The demo's dashboard (`node demo/agent.js --dashboard`) listened on every interface, so another machine that sent `Host: localhost` could read every decision, payee, amount and transaction (approvals were still refused). It now listens on 127.0.0.1, as the MCP server's does, and takes a free port when `DASHBOARD_PORT` is taken instead of crashing with `EADDRINUSE`. Both use `listenLocal` from `demo/dashboard.js`.
 
 ## 0.1.0 - 2026-10-30
 
