@@ -8,7 +8,7 @@ A real run on Arc testnet with x402 `exact` (`node demo/agent.js --arc-x402 --da
 
 Agents are starting to pay per call over HTTP 402: the server answers `402 Payment Required` with a price, the agent pays and gets the data (the [x402](https://www.x402.org/) protocol). An agent that can pay can also be talked into paying: a prompt injection, a retry loop, or a paywall that raises its price or swaps its payout address. Spend Guard sits between the agent and its money. Every payment is checked against budgets, a payee allowlist and the endpoint's usual price, and anything unusual waits for a person to approve it. All of this happens before any USDC leaves and before any authorization is signed. It pays on Circle's Arc testnet by plain USDC transfer, by x402 `exact` (EIP-3009) and by Circle Gateway nanopayments, from a local key, and in NEAR on NEAR testnet. A rail for Circle developer-controlled wallets is tested offline only. Claude and other MCP clients can use it as an MCP server.
 
-Status: testnet only, not audited, not on npm yet. MIT licensed.
+Status: testnet only, not audited. On npm as [`@vulinh1704/spend-guard`](https://www.npmjs.com/package/@vulinh1704/spend-guard). MIT licensed.
 
 ## Quickstart (1 minute, no keys)
 
@@ -129,7 +129,7 @@ There is no tool to approve a payment or to change the policy. Payments the poli
 
 The config goes in `.mcp.json` (Claude Code, project scope) or `claude_desktop_config.json` (Claude Desktop). Cursor and other clients take the same `mcpServers` shape.
 
-From npm, once the package is published. The default `mock` rail pays nothing, so this is a safe first try:
+From npm. The default `mock` rail pays nothing, so this is a safe first try:
 
 ```json
 {
@@ -145,7 +145,7 @@ From npm, once the package is published. The default `mock` rail pays nothing, s
 
 The mock rail pretends to pay on `near-testnet`, so this policy must allow that network: list `"networks": ["near-testnet"]`, or leave `networks` out and the server allows the networks of the rails it runs. A policy that lists only Arc networks leaves the mock rail nothing it may pay. To have something to pay, run the demo paywall from a clone, `node demo/paid-api.js`, and ask the agent to fetch http://localhost:4402/weather. [`demo/mcp-policy.json`](demo/mcp-policy.json) is a mock policy that knows its payees.
 
-From a clone (this works today), and for the rails that pay. Node reads the keys from `.env` with `--env-file`, which npx can't pass on, so they stay out of the client's config:
+From a clone, and for the rails that pay. Node reads the keys from `.env` with `--env-file`, which npx can't pass on, so they stay out of the client's config:
 
 ```json
 {
@@ -159,7 +159,7 @@ From a clone (this works today), and for the rails that pay. Node reads the keys
 }
 ```
 
-Or in Claude Code: `claude mcp add spend-guard -- npx -y @vulinh1704/spend-guard mcp` once published, or from a clone `claude mcp add spend-guard --env SPEND_GUARD_POLICY=/abs/path/policy.json --env SPEND_GUARD_RAILS=arc -- node --env-file=/abs/path/spend-guard/.env /abs/path/spend-guard/bin/spend-guard.js mcp`
+Or in Claude Code: `claude mcp add spend-guard -- npx -y @vulinh1704/spend-guard mcp`, or from a clone `claude mcp add spend-guard --env SPEND_GUARD_POLICY=/abs/path/policy.json --env SPEND_GUARD_RAILS=arc -- node --env-file=/abs/path/spend-guard/.env /abs/path/spend-guard/bin/spend-guard.js mcp`
 
 A `policy.json` for the `arc,gateway` config. Its `networks` are the ones those two rails pay on; with other rails, list theirs or leave `networks` out:
 
@@ -232,7 +232,7 @@ const guard = new Guard({
 const res = await payingFetch(guard, 'https://api.example.com/data'); // pays a 402 through the guard
 ```
 
-`payingFetch` throws `GuardRefused` with the reasons when the guard says no. `Approvals` is the queue the dashboard and the MCP server use for `approve`. The package isn't published yet, so for now install it from a clone (`npm install /path/to/spend-guard`).
+`payingFetch` throws `GuardRefused` with the reasons when the guard says no. `Approvals` is the queue the dashboard and the MCP server use for `approve`. Install it with `npm install @vulinh1704/spend-guard` (Node 22.22.2 or later).
 
 ## Docs
 
