@@ -1,7 +1,11 @@
 import assert from 'node:assert/strict';
+import { spawn } from 'node:child_process';
 import http from 'node:http';
+import net from 'node:net';
+import os from 'node:os';
 import { after, before, describe, test } from 'node:test';
-import { createDashboard } from '../demo/dashboard.js';
+import { fileURLToPath } from 'node:url';
+import { createDashboard, listenLocal } from '../demo/dashboard.js';
 import { Approvals } from '../src/approval.js';
 import { Guard, GuardRefused, PaymentUnconfirmed } from '../src/guard.js';
 import { evaluate } from '../src/policy.js';
@@ -266,5 +270,71 @@ describe('dashboard approvals', () => {
     assert.equal((await fromPage(base, ask.data.id, true)).status, 404);
     await declined;
     stream.close();
+  });
+});
+
+/** 'connected', or the error code of a TCP connection to `host:port`. */
+function connect(host, port) {
+  return new Promise((resolve) => {
+    const socket = net.connect({ host, port, timeout: 2000 });
+    const done = (result) => {
+      socket.destroy();
+      resolve(result);
+    };
+    socket.once('connect', () => done('connected'));
+    socket.once('timeout', () => done('timeout'));
+    socket.once('error', (err) => done(err.code));
+  });
+}
+
+/** An address of this machine that other machines can reach, if it has one. */
+const lanAddress = Object.values(os.networkInterfaces()).flat().find((a) => a?.family === 'IPv4' && !a.internal)?.address;
+
+describe('dashboard address', () => {
+  test('listens on 127.0.0.1 only, and on a free port when the one asked for is taken', async () => {
+    const taken = http.createServer();
+    const port = await listenLocal(taken, 0);
+    const server = http.createServer();
+    try {
+      assert.equal(taken.address().address, '127.0.0.1');
+      const got = await listenLocal(server, port);
+      assert.notEqual(got, port);
+      assert.equal(server.address().address, '127.0.0.1');
+    } finally {
+      server.close();
+      taken.close();
+    }
+  });
+
+  test('a bad port is refused, not swapped for a free one', async () => {
+    await assert.rejects(listenLocal(http.createServer(), 70000), { code: 'ERR_SOCKET_BAD_PORT' });
+  });
+
+  // The demo used to listen on every interface (another machine could read the feed with a
+  // localhost Host header), and crashed when 4400 was taken, say by a running `spend-guard mcp`.
+  test('the demo agent serves its dashboard on 127.0.0.1, and on a free port when DASHBOARD_PORT is taken', { timeout: 10000 }, async (t) => {
+    const taken = http.createServer();
+    const port = await listenLocal(taken, 0);
+    t.after(() => taken.close());
+    const agent = spawn(process.execPath, [fileURLToPath(new URL('../demo/agent.js', import.meta.url)), '--dashboard'], {
+      env: { PATH: process.env.PATH, DASHBOARD_PORT: String(port) },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    t.after(() => agent.kill());
+    let out = '';
+    const got = await new Promise((resolve, reject) => {
+      const read = (d) => {
+        out += d;
+        const m = out.match(/dashboard on http:\/\/localhost:(\d+)/);
+        if (m) resolve(Number(m[1]));
+      };
+      agent.stdout.on('data', read);
+      agent.stderr.on('data', read);
+      agent.once('exit', (code) => reject(new Error(`the demo exited (${code}) before serving the dashboard:\n${out}`)));
+    });
+    assert.match(out, new RegExp(`port ${port} is taken, so the dashboard takes a free one`));
+    assert.notEqual(got, port);
+    assert.equal((await fetch(`http://127.0.0.1:${got}/`)).status, 200);
+    if (lanAddress) assert.equal(await connect(lanAddress, got), 'ECONNREFUSED', `reachable on ${lanAddress}`);
   });
 });

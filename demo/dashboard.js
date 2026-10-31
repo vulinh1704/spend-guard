@@ -110,6 +110,29 @@ export function createDashboard(guard, { title = 'Spend Guard', account = '', ex
   }
 }
 
+/**
+ * Listen on 127.0.0.1 only: on every interface, another machine could read the feed by sending
+ * `Host: localhost`. When `port` is taken (say a second server runs), a free one is used.
+ * @param {http.Server} server
+ * @param {number} port 0 picks a free one
+ * @returns {Promise<number>} the port it listens on
+ */
+export function listenLocal(server, port) {
+  return new Promise((resolve, reject) => {
+    const failed = (err) => {
+      if (err.code !== 'EADDRINUSE' || port === 0) return reject(err);
+      port = 0;
+      server.listen(0, '127.0.0.1');
+    };
+    server.on('error', failed);
+    server.once('listening', () => {
+      server.off('error', failed);
+      resolve(server.address().port);
+    });
+    server.listen(port, '127.0.0.1');
+  });
+}
+
 const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]']);
 
 function hostname(hostHeader) {

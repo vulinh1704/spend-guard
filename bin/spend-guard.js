@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { createDashboard } from '../demo/dashboard.js';
+import { createDashboard, listenLocal } from '../demo/dashboard.js';
 import { Approvals } from '../src/approval.js';
 import { guardFromEnv, serveMcp, toolRunner, VERSION } from '../src/mcp.js';
 
@@ -74,7 +74,10 @@ async function mcp(env) {
     // Loaded only when used: Gateway's page for a payment, by its authorization nonce.
     if (guard.rails.has('arc-testnet-gateway')) explorers['arc-testnet-gateway'] = (await import('../src/rails/gateway.js')).gatewayTransferUrl;
     dashboard = createDashboard(guard, { approvals, account, explorer: (tx, network) => explorers[network]?.(tx) ?? null });
-    dashboardUrl = `http://127.0.0.1:${await listen(dashboard, Number(port))}`;
+    // A second client running the server finds 4400 taken, so its dashboard takes a free port.
+    const got = await listenLocal(dashboard, Number(port));
+    if (Number(port) && got !== Number(port)) console.error(`spend-guard: port ${port} is taken, so the dashboard takes a free one`);
+    dashboardUrl = `http://127.0.0.1:${got}`;
     console.error(`spend-guard: approve payments on ${dashboardUrl}`);
   }
 
@@ -87,18 +90,6 @@ async function mcp(env) {
   process.stdin.once('end', stop);
   await serveMcp({ run: toolRunner({ guard, approvals, dashboardUrl }), dashboardUrl });
   stop();
-}
-
-/** Listen on 127.0.0.1; when the port is taken (say a second client runs the server), on a free one. */
-function listen(server, port) {
-  return new Promise((resolve, reject) => {
-    server.once('error', (err) => {
-      if (err.code !== 'EADDRINUSE' || port === 0) return reject(err);
-      console.error(`spend-guard: port ${port} is taken, so the dashboard takes a free one`);
-      server.listen(0, '127.0.0.1', () => resolve(server.address().port));
-    });
-    server.listen(port, '127.0.0.1', () => resolve(server.address().port));
-  });
 }
 
 main(process.argv.slice(2)).then(

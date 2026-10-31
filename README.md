@@ -22,7 +22,7 @@ node demo/agent.js                       # a scripted agent against a demo paywa
 node demo/agent.js --dashboard           # the same run, paced, with the live page on http://localhost:4400
 ```
 
-With `--dashboard`, open http://localhost:4400 while it runs. The $0.30 `/report` waits there for Approve or Deny, and is declined after 120 seconds without an answer. The page stays up until you press Ctrl+C. Set `DASHBOARD_PORT` if 4400 is taken.
+With `--dashboard`, open http://localhost:4400 while it runs. The $0.30 `/report` waits there for Approve or Deny, and is declined after 120 seconds without an answer. The page stays up until you press Ctrl+C. If 4400 is taken, the demo takes a free port and prints it; `DASHBOARD_PORT` picks another.
 
 ## What it stops
 
@@ -185,7 +185,7 @@ Try it without a model: `node scripts/mcp-demo.js` (mock), or `node scripts/mcp-
 
 ![The dashboard during the offline demo: spent today $0.10 of $1.00, 8 paid, 2 stopped, and a $0.30 payment for /report waiting with Approve and Deny buttons](docs/img/dashboard.png)
 
-The dashboard is a live page on `http://localhost:4400`. It shows the budget, every decision with its reasons and a link to its transaction, and an Approve or Deny card with a countdown for each flagged payment. It answers only on localhost, and an approval is accepted only from the page itself (same Origin, loopback peer, JSON body). It has light and dark themes, works on phones, and is checked with [Mantis](https://github.com/vulinh1704/mantis) (`scripts/check-dashboard.sh`: 0 errors and 0 warnings on mobile and desktop, light and dark).
+The dashboard is a live page on `http://localhost:4400`. It shows the budget, every decision with its reasons and a link to its transaction, and an Approve or Deny card with a countdown for each flagged payment. It listens on 127.0.0.1 only and answers to localhost names only, and an approval is accepted only from the page itself (same Origin, loopback peer, JSON body). It has light and dark themes, works on phones, and is checked with [Mantis](https://github.com/vulinh1704/mantis) (`scripts/check-dashboard.sh`: 0 errors and 0 warnings on mobile and desktop, light and dark).
 
 ```
 node demo/agent.js --dashboard           # the offline demo, paced for watching; /report waits for your answer

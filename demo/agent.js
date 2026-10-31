@@ -10,8 +10,9 @@
  *                                      # (needs ARC_FACILITATOR_PRIVATE_KEY, see scripts/arc-facilitator.js)
  *   node demo/agent.js --gateway       # Circle Gateway nanopayments on Arc testnet (needs .env and a
  *                                      # Gateway deposit, see scripts/gateway-deposit.js)
- *   node demo/agent.js --dashboard     # also serves the live page on DASHBOARD_PORT (default 4400),
- *                                      # paces the calls for watching, and stays up until Ctrl+C;
+ *   node demo/agent.js --dashboard     # also serves the live page on 127.0.0.1, port DASHBOARD_PORT
+ *                                      # (default 4400, or a free one when it is taken), paces the
+ *                                      # calls for watching, and stays up until Ctrl+C;
  *                                      # a flagged payment waits there for Approve or Deny
  *                                      # (declined after APPROVAL_TIMEOUT seconds, default 120)
  */
@@ -19,7 +20,7 @@ import { existsSync } from 'node:fs';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { createWalletClient, erc20Abi, http } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
-import { createDashboard } from './dashboard.js';
+import { createDashboard, listenLocal } from './dashboard.js';
 import { createGatewaySeller } from './gateway-seller.js';
 import { createPaidApi, PAYEES } from './paid-api.js';
 import { Approvals } from '../src/approval.js';
@@ -114,9 +115,10 @@ const guard = new Guard({
 
 let dashboard;
 if (withDashboard) {
-  const port = Number(process.env.DASHBOARD_PORT ?? 4400);
+  const wanted = Number(process.env.DASHBOARD_PORT ?? 4400);
   dashboard = createDashboard(guard, { account: label, explorer, approvals });
-  await new Promise((resolve) => dashboard.listen(port, resolve));
+  const port = await listenLocal(dashboard, wanted);
+  if (wanted && port !== wanted) console.log(dim(`port ${wanted} is taken, so the dashboard takes a free one`));
   console.log(`dashboard on http://localhost:${port}; starting in 3s`);
   await sleep(3000);
 }

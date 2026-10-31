@@ -28,6 +28,7 @@ The guard is a library in the agent's process, or the `spend-guard mcp` server n
 | Approval during a spend | a payment waits for a human while others go out | it is checked again against the budget after the yes | `Guard.pay` re-evaluates |
 | Abandoned payment | the MCP client cancels a call, or times out, while it waits for approval | it is withdrawn and never paid | `pay_and_fetch` passes the abort signal to the guard |
 | Forged approval | a web page posts "approve" to the dashboard | refused: localhost Host, loopback peer, same Origin, JSON body | `demo/dashboard.js` |
+| Reading the feed | another machine, or a DNS-rebinding page, reads the dashboard's payees, amounts and transactions | refused: it listens on 127.0.0.1 only and answers to localhost names only | `listenLocal` in `demo/dashboard.js` |
 | Made-up or reused proof (paywall side) | a client sends a made-up txid, a proof or signature the paywall already accepted, even twice at once | the paywall refuses it | `checkArcPayment`, `checkNearPayment`, `verifyAuthorization`, `checkGatewayAuthorization`, replay checks in the demo paywalls |
 
 Every decision, including the refusals, is in the ledger with its reasons, so you can audit what happened later.
