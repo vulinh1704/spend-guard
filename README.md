@@ -195,7 +195,7 @@ node demo/agent.js --dashboard           # the offline demo, paced for watching;
 
 ```
 npm install
-npm test                                 # 181 tests, offline: no network, no keys
+npm test                                 # 184 tests, offline: no network, no keys
 node demo/agent.js                       # offline demo, mock payments
 ```
 
@@ -239,6 +239,7 @@ const res = await payingFetch(guard, 'https://api.example.com/data'); // pays a 
 - [Rails](docs/rails.md): each rail, what the paywall checks, and how to write one.
 - [Circle Wallets](docs/circle-wallets.md): setup, and Circle's controls next to the guard's.
 - [Threat model](docs/threat-model.md): what it stops, what it can't, and the known gaps.
+- [Publishing](docs/publishing.md): releasing to npm and the MCP Registry.
 - [CHANGELOG](CHANGELOG.md), [CONTRIBUTING](CONTRIBUTING.md), [SECURITY](SECURITY.md).
 
 ## Roadmap
@@ -248,7 +249,7 @@ Not built yet. This is the order I plan to build them in:
 1. **Circle Wallets live.** Run the rail against Circle's testnet with a developer account, then offer it in the MCP server, so an agent pays from a wallet whose key never leaves Circle.
 2. **Settle through Circle instead of my own settler.** Use Circle's facilitator for x402 `exact` on Arc where it is available, and Gateway on more chains from the same deposit.
 3. **Close the known gaps.** Count gas in the budgets, keep Gateway's unsettled count across restarts, and accept smart-wallet payers (ERC-1271), such as Circle SCA wallets, whose gas Circle's Gas Station can sponsor.
-4. **Publish.** npm package, a listing in the MCP registry, and a hosted policy and approvals page for teams.
+4. **Publish.** The npm package and the MCP Registry entry (`server.json`) are ready to go out, as [docs/publishing.md](docs/publishing.md) describes. Then a hosted policy and approvals page for teams.
 5. **Mainnet,** only after an external review of the guard and the rails.
 
 ## License

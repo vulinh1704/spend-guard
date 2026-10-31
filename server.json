@@ -1,0 +1,86 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.vulinh1704/spend-guard",
+  "title": "Spend Guard",
+  "description": "Budgets, payee allowlists, price-spike checks and human approval for agents paying x402 paywalls",
+  "repository": {
+    "url": "https://github.com/vulinh1704/spend-guard",
+    "source": "github"
+  },
+  "websiteUrl": "https://github.com/vulinh1704/spend-guard#readme",
+  "version": "0.2.0",
+  "packages": [
+    {
+      "registryType": "npm",
+      "registryBaseUrl": "https://registry.npmjs.org",
+      "identifier": "@vulinh1704/spend-guard",
+      "version": "0.2.0",
+      "runtimeHint": "npx",
+      "transport": {
+        "type": "stdio"
+      },
+      "packageArguments": [
+        {
+          "type": "positional",
+          "value": "mcp"
+        }
+      ],
+      "environmentVariables": [
+        {
+          "name": "SPEND_GUARD_POLICY",
+          "description": "Policy JSON file: networks, budgets, approval amount, spike ratio, known services and their payees. Without one, every payment waits for your approval.",
+          "format": "filepath",
+          "isRequired": false
+        },
+        {
+          "name": "SPEND_GUARD_RAILS",
+          "description": "How to pay: mock (pays nothing), near, arc, gateway, or a comma list. arc and gateway need ARC_PRIVATE_KEY, near needs NEAR_ACCOUNT_ID and NEAR_PRIVATE_KEY.",
+          "default": "mock",
+          "isRequired": false
+        },
+        {
+          "name": "SPEND_GUARD_LEDGER",
+          "description": "Decisions file, read back on start so a restart keeps today's spend; servers on one file share one budget. Default ~/.spend-guard/ledger.jsonl; off keeps it in memory.",
+          "format": "filepath",
+          "isRequired": false
+        },
+        {
+          "name": "SPEND_GUARD_DASHBOARD_PORT",
+          "description": "Port of the approval dashboard on 127.0.0.1. 0 picks a free one; off means no dashboard, and payments that need approval are declined.",
+          "default": "4400",
+          "isRequired": false
+        },
+        {
+          "name": "SPEND_GUARD_APPROVAL_TIMEOUT",
+          "description": "Seconds a payment waits for your answer before it is declined. Raise it together with your client's tool timeout.",
+          "format": "number",
+          "default": "55",
+          "isRequired": false
+        },
+        {
+          "name": "SPEND_GUARD_MOCK_NETWORK",
+          "description": "Network the mock rail pretends to pay on.",
+          "default": "near-testnet",
+          "isRequired": false
+        },
+        {
+          "name": "ARC_PRIVATE_KEY",
+          "description": "Agent key for the arc and gateway rails. Testnet keys only.",
+          "isRequired": false,
+          "isSecret": true
+        },
+        {
+          "name": "NEAR_ACCOUNT_ID",
+          "description": "Agent account for the near rail (testnet).",
+          "isRequired": false
+        },
+        {
+          "name": "NEAR_PRIVATE_KEY",
+          "description": "Agent key for the near rail. Testnet keys only.",
+          "isRequired": false,
+          "isSecret": true
+        }
+      ]
+    }
+  ]
+}

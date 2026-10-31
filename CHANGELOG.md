@@ -19,6 +19,7 @@ On `main`, not published to npm yet.
 - npm package `@vulinh1704/spend-guard`. The unscoped name `spend-guard` cannot be used on npm because it differs from the existing, unrelated `spendguard` package only by punctuation.
 - Rail entry points: `@vulinh1704/spend-guard/rails/<name>`, so an agent loads only the SDK of the chain it pays on.
 - Package metadata: `files` whitelist (`src/`, `bin/` and the dashboard ship), `sideEffects: false`, `engines.node >=20.19.0`, and the `spend-guard` command.
+- MCP Registry entry: `server.json` for `io.github.vulinh1704/spend-guard` (npm, stdio, `npx @vulinh1704/spend-guard mcp`, every variable the server reads) and `mcpName` in `package.json`. Release steps in [docs/publishing.md](docs/publishing.md).
 - CI on GitHub Actions: tests on Node 20, 22 and 24, plus the offline demo, which must still stop the price spike and the payee swap and ask before the large payment.
 - Docs: [architecture](docs/architecture.md), [policy reference](docs/policy.md), [rails](docs/rails.md) and [threat model](docs/threat-model.md); [SECURITY.md](SECURITY.md) and [CONTRIBUTING.md](CONTRIBUTING.md).
 - The demo paywall has a `/report` endpoint ($0.30) that is honest but needs approval.
