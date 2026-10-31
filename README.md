@@ -56,7 +56,7 @@ agent wallet $17.999436 → $17.899436 USDC (-$0.10)
 
 | Rule | What it catches |
 |---|---|
-| Budgets per payment, per day and per service | runaway loops, overpriced calls |
+| A per-payment limit, a daily budget and a per-call cap for each service | overpriced calls; a loop's total stops at the daily budget |
 | Payee allowlist per service | a paywall that starts asking to be paid somewhere else |
 | Price spike against the endpoint's usual price | a sudden 5x, 40x, 1000x |
 | Human approval above a threshold, or for an unknown service | large payments, a payment to a host the policy doesn't list, such as one an injected page pointed the agent to |
@@ -187,7 +187,7 @@ Try it without a model: `node scripts/mcp-demo.js` (mock), or `node scripts/mcp-
 
 ![The dashboard during the offline demo: spent today $0.10 of $1.00, 8 paid, 2 stopped, and a $0.30 payment for /report waiting with Approve and Deny buttons](docs/img/dashboard.png)
 
-The dashboard is a live page on `http://localhost:4400`. It shows the budget, every decision with its reasons and a link to its transaction, and an Approve or Deny card with a countdown for each flagged payment. It listens on 127.0.0.1 only and answers to localhost names only, and an approval is accepted only from the page itself (same Origin, loopback peer, JSON body). It has light and dark themes, works on phones, and is checked with [Mantis](https://github.com/vulinh1704/mantis) (`scripts/check-dashboard.sh`: 0 errors and 0 warnings on mobile and desktop, light and dark).
+The dashboard is a live page on `http://localhost:4400`. It shows the budget, every decision with its reasons and a link to its transaction, and an Approve or Deny card with a countdown for each flagged payment. It listens on 127.0.0.1 only and answers to localhost names only, and an approval is accepted only from the page itself (same Origin, loopback peer, JSON body). It has light and dark themes and a responsive layout (it answers on localhost only, so approving from a phone is on the roadmap), and is checked with [Mantis](https://github.com/vulinh1704/mantis) (`scripts/check-dashboard.sh`: 0 errors and 0 warnings on mobile and desktop, light and dark).
 
 ```
 node demo/agent.js --dashboard           # the offline demo, paced for watching; /report waits for your answer
