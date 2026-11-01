@@ -243,6 +243,7 @@ Spend Guard is my entry to [NEAR HACKATHON](https://nearhackathon.com), in the t
 - **Window.** Code written from the announcement on 19 Oct 2026 counts. The hackathon runs 1–14 Nov 2026, and submissions close on 14 Nov 2026 at 23:59 UTC.
 - **All of this repository is from the window.** Its first commit, [`90d376b`](https://github.com/vulinh1704/spend-guard/commit/90d376b), is from 30 Oct 2026. There is no earlier code here, so there is no `pre-hackathon` tag, and the diff is the whole repository. Check it with `git log --reverse --format='%h %ad %s' --date=short | head -3`.
 - **Submission tag:** [`near-hackathon-2026`](https://github.com/vulinh1704/spend-guard/tree/near-hackathon-2026) is the state I submitted ([its commits](https://github.com/vulinh1704/spend-guard/commits/near-hackathon-2026)).
+- **AI assistance (rule Q-005).** Parts of the code, tests and docs were written with an AI coding assistant (Claude Code). I reviewed and tested every change.
 - **Demo:** video VIDEO_URL_TODO, demo post DEMO_POST_URL_TODO. I can't post on X, so the demo post is on LinkedIn.
 
 ### What NEAR does here
