@@ -10,6 +10,8 @@ Agents are starting to pay per call over HTTP 402: the server answers `402 Payme
 
 Status: testnet only, not audited. On npm as [`@vulinh1704/spend-guard`](https://www.npmjs.com/package/@vulinh1704/spend-guard) and in the official MCP Registry as `io.github.vulinh1704/spend-guard`. MIT licensed.
 
+Built for [NEAR HACKATHON](https://nearhackathon.com) (19 Oct–14 Nov 2026). What was built in the window, the submission tag and how to run the NEAR testnet demo are in [Built for NEAR HACKATHON](#built-for-near-hackathon).
+
 ## Quickstart (1 minute, no keys)
 
 You need git and Node 22.22.2 or later. No keys and no wallet: the payments are mocked, and nothing leaves your machine after the install.
@@ -233,6 +235,56 @@ const res = await payingFetch(guard, 'https://api.example.com/data'); // pays a 
 ```
 
 `payingFetch` throws `GuardRefused` with the reasons when the guard says no. `Approvals` is the queue the dashboard and the MCP server use for `approve`. Install it with `npm install @vulinh1704/spend-guard` (Node 22.22.2 or later).
+
+## Built for NEAR HACKATHON
+
+Spend Guard is my entry to [NEAR HACKATHON](https://nearhackathon.com), in the tracks AI Security & Defense (`security`) and Agent Economy (`agents`).
+
+- **Window.** Code written from the announcement on 19 Oct 2026 counts. The hackathon runs 1–14 Nov 2026, and submissions close on 14 Nov 2026 at 23:59 UTC.
+- **All of this repository is from the window.** Its first commit, [`90d376b`](https://github.com/vulinh1704/spend-guard/commit/90d376b), is from 30 Oct 2026. There is no earlier code here, so there is no `pre-hackathon` tag, and the diff is the whole repository. Check it with `git log --reverse --format='%h %ad %s' --date=short | head -3`.
+- **Submission tag:** [`near-hackathon-2026`](https://github.com/vulinh1704/spend-guard/tree/near-hackathon-2026) is the state I submitted ([its commits](https://github.com/vulinh1704/spend-guard/commits/near-hackathon-2026)).
+- **Demo:** video VIDEO_URL_TODO, demo post DEMO_POST_URL_TODO. I can't post on X, so the demo post is on LinkedIn.
+
+### What NEAR does here
+
+The agent pays in native NEAR from its own testnet account, and the paywall reads every payment back from the chain before it serves the data.
+
+- `src/rails/near.js`: `NearRail` sends a NEAR transfer only for a payment the guard has already approved, to the approved account and for the approved amount. It keeps the hash of the transaction it signed, so a transfer that was sent but lost in an RPC timeout is recorded as `unconfirmed` and still counts against the budget. `checkNearPayment` is the paywall's side: it fetches the transaction from NEAR RPC and checks that it succeeded, went to the expected account and deposited at least the price.
+- Named accounts make the payee check easy to read. The demo paywall is `sg-paywall-<id>.testnet`, with one sub-account per service (`weather.`, `news.`, `quotes.`, `maps.`) and the look-alike `rnaps.` that the bad `/maps` endpoint switches to. `scripts/near-testnet-account.js` and `scripts/near-demo-payees.js` create them on testnet.
+- `node demo/agent.js --near` runs the test agent against that paywall with real testnet transfers and links each one on testnet.nearblocks.io. `spend-guard mcp` runs the same rail with `SPEND_GUARD_RAILS=near`.
+- `test/near.test.js` covers the rail and the paywall check offline.
+
+Also built in the window, and not specific to NEAR: the guard itself (policy, ledger, approvals), the x402 client, the dashboard, the MCP server and the npm package. The rails for USDC on Circle's Arc testnet (plain transfer, x402 `exact`, Circle Gateway, Circle Wallets) were built in the same window for Circle's chain. They are not part of the NEAR integration.
+
+Libraries: `near-api-js` (the NEAR rail), `viem` (EVM address checks and the Arc rails), Circle's `@circle-fin/developer-controlled-wallets` and `@circle-fin/x402-batching` (Arc rails only), and `@modelcontextprotocol/sdk` (tests and the MCP demo script only). [Mantis](https://github.com/vulinh1704/mantis), my own UI checker and a separate project, checks the dashboard's layout in `scripts/check-dashboard.sh`. It is not shipped and is not part of this entry.
+
+### Run the NEAR testnet demo
+
+You need git and Node 22.22.2 or later. Testnet NEAR has no value. Never use a mainnet key here.
+
+1. Get the code: `git clone https://github.com/vulinh1704/spend-guard && cd spend-guard && git checkout near-hackathon-2026 && npm ci`
+2. Offline first, with no keys. `npm test` → 189 tests pass. `node demo/agent.js` → 8 paid calls, a 40x price spike denied, a payment to `rnaps.paywall.testnet` denied, the $0.30 `/report` declined, and `spent today $0.10 of $1.00; 3 payments stopped`.
+3. `node scripts/near-testnet-account.js` → `created spend-guard-<id>.testnet; key written to .env`. It refuses to run if `.env` already exists.
+4. `node scripts/near-demo-payees.js` → five lines `created <name>.sg-paywall-<id>.testnet`, the last one for `rnaps`.
+5. `node demo/agent.js --near --dashboard`, then open http://localhost:4400 →
+   - `✓ paid $0.01 /weather … https://testnet.nearblocks.io/txns/<hash>`: a real transfer of 0.004 testnet NEAR from your agent account to `weather.sg-paywall-<id>.testnet`. Prices are set in dollars and converted at a fixed $2.50 per NEAR.
+   - `✗ denied /quotes $0.40 is 40x the usual $0.01 …`: refused before signing, so there is no transaction.
+   - `✗ denied /maps … asked to be paid at rnaps.sg-paywall-<id>.testnet, which is not one of its known addresses`: refused before signing. The `rnaps.` account still holds only the 0.05 NEAR it was created with.
+   - The $0.30 `/report` waits on the dashboard for Approve or Deny, and is declined after 120 seconds. Approve sends 0.12 testnet NEAR.
+   - Press Ctrl+C to stop the dashboard.
+
+A run without Approve spends $0.10 at the demo rate (0.04 testnet NEAR), plus gas. Both setup scripts create accounts through the public testnet helper at `helper.nearprotocol.com`. If it is down, steps 1 and 2 still show every rule offline.
+
+### Limits
+
+- NEAR testnet only. The demo and the MCP server are fixed to `near-testnet`.
+- Not audited.
+- The MCP server is local (stdio) only, and there is no hosted demo. It needs Node 22.22.2 or later, because `near-api-js` 7 does.
+- The demo agent is a scripted test agent, not a model. With an MCP client the model calls `pay_and_fetch`, but the repository has no NEAR demo paywall for that path yet: `scripts/mcp-demo.js` covers the mock and Arc rails.
+- NEAR prices convert from dollars at a fixed $2.50 (`ASSETS` in `src/money.js`), so dollar limits on NEAR are approximate.
+- The agent's account signs with a full-access key, because a function-call key can't send a NEAR transfer. Keep only what the agent may spend in that account. The guard limits what the agent pays through it. Code that holds the key can still pay without it.
+- A transfer proof works for whoever sends it to the paywall first, and the demo paywall remembers used proofs only while it runs. Both are listed in [docs/threat-model.md](docs/threat-model.md#known-gaps).
+- No NEAR Intents, Chain Signatures or NEAR AI integration yet.
 
 ## Docs
 
