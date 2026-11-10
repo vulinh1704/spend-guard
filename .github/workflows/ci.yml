@@ -36,6 +36,23 @@ jobs:
       - run: npm ci
       - run: npm test
 
+  contract:
+    # The NEAR guard contract's unit tests (offline, no chain), and a check that the committed
+    # wasm is the file its checksum names.
+    name: NEAR guard contract
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash
+        working-directory: contracts/near-guard
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install the toolchain in rust-toolchain.toml
+        run: rustup toolchain install
+      - run: cargo test --locked
+      - run: sha256sum -c res/SHA256SUMS
+        working-directory: contracts/near-guard/res
+
   demo:
     # The offline demo is the README example: it must keep paying the honest endpoints, stopping
     # the price spike and the payee swap, and asking before the $0.30 report (no one answers, so

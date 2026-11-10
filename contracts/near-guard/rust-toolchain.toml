@@ -1,0 +1,4 @@
+# Pinned so the committed wasm can be rebuilt with the same compiler. near-sdk 5.30 needs 1.95+.
+[toolchain]
+channel = "1.99.1"
+targets = ["wasm32-unknown-unknown"]
