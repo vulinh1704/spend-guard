@@ -4,6 +4,9 @@
  *
  *   node demo/agent.js                 # mock payments, offline
  *   node demo/agent.js --near          # real NEAR testnet transfers (needs .env, see scripts/)
+ *   node demo/agent.js --near-guard    # NEAR testnet through the guard contract: the agent holds only
+ *                                      # a function-call key for pay() (needs NEAR_GUARD_ID and
+ *                                      # NEAR_GUARD_AGENT_KEY in .env, see scripts/near-guard-deploy.js)
  *   node demo/agent.js --arc           # real USDC transfers on Circle's Arc testnet (needs .env)
  *   node demo/agent.js --arc-x402      # x402 v2 'exact' on Arc: the agent only signs EIP-3009
  *                                      # authorizations; the paywall settles them and pays the gas
@@ -29,7 +32,7 @@ import { formatUsd } from '../src/money.js';
 import { ARC_USDC, ArcRail, arcTestnet, checkArcPayment } from '../src/rails/arc.js';
 import { GatewayRail, gatewayTransferUrl } from '../src/rails/gateway.js';
 import { MockRail } from '../src/rails/mock.js';
-import { checkNearPayment, NearRail } from '../src/rails/near.js';
+import { checkNearPayment, formatNear, NearGuardRail, NearRail } from '../src/rails/near.js';
 import { payingFetch } from '../src/x402.js';
 
 const PLAN = ['weather', 'news', 'quotes', 'quotes', 'quotes', 'quotes', 'maps', 'maps', 'maps', 'weather', 'report'];
@@ -44,13 +47,21 @@ const dim = color(2);
 function setUp(mode) {
   if (mode !== 'mock' && existsSync('.env')) process.loadEnvFile('.env');
   const env = process.env;
-  if (mode === 'near') {
-    const rail = new NearRail({ accountId: env.NEAR_ACCOUNT_ID, privateKey: env.NEAR_PRIVATE_KEY, network: 'near-testnet' });
+  if (mode === 'near' || mode === 'near-guard') {
+    const rail = mode === 'near'
+      ? new NearRail({ accountId: env.NEAR_ACCOUNT_ID, privateKey: env.NEAR_PRIVATE_KEY, network: 'near-testnet' })
+      : new NearGuardRail({ guardId: env.NEAR_GUARD_ID, privateKey: env.NEAR_GUARD_AGENT_KEY, network: 'near-testnet' });
     const payees = { weather: env.PAYEE_WEATHER, news: env.PAYEE_NEWS, quotes: env.PAYEE_QUOTES, maps: env.PAYEE_MAPS, thief: env.PAYEE_THIEF };
+    const who = mode === 'near' ? 'agent account' : 'guard contract';
     return {
-      rail, payees, label: `${rail.accountId} · NEAR testnet`,
+      rail, payees,
+      label: mode === 'near' ? `${rail.accountId} · NEAR testnet` : `${rail.guardId} · NEAR testnet · guard contract, function-call key for pay() only`,
       paywall: createPaidApi({ network: 'near-testnet', asset: 'near', payees, verify: (p, e) => checkNearPayment(rail.provider, p, e) }),
       explorer: (txid) => `https://testnet.nearblocks.io/txns/${txid}`,
+      balance: () => rail.balance(),
+      // What left the account beyond the payments is gas (with the guard contract, the agent key's
+      // gas is charged to the guard's account too).
+      showBalance: (before, after, paid) => `${who} ${formatNear(before)} → ${formatNear(after)} NEAR (${formatNear(after - before)}: ${formatNear(paid)} paid, ${formatNear(before - after - paid)} gas)`,
     };
   }
   if (mode === 'arc' || mode === 'arc-x402') {
@@ -68,6 +79,9 @@ function setUp(mode) {
       paywall: createPaidApi({ network: 'arc-testnet', asset: 'usdc', payees, verify: (p, e) => checkArcPayment(rail.publicClient, p, e), exact }),
       explorer: (txid) => `https://testnet.arcscan.app/tx/${txid}`,
       balance: () => rail.publicClient.readContract({ address: ARC_USDC, abi: erc20Abi, functionName: 'balanceOf', args: [rail.address] }),
+      // USDC has 6 decimals, so atomic units are micro-dollars. With x402 exact the difference is
+      // the payments alone: the paywall paid the gas.
+      showBalance: (before, after) => `agent wallet ${formatUsd(before)} → ${formatUsd(after)} USDC (${formatUsd(after - before)})`,
     };
   }
   if (mode === 'gateway') {
@@ -83,8 +97,8 @@ function setUp(mode) {
   return { rail: new MockRail('near-testnet'), payees: PAYEES, label: 'mock payments · offline', paywall: createPaidApi(), explorer: undefined };
 }
 
-const mode = ['near', 'arc-x402', 'arc', 'gateway'].find((m) => process.argv.includes(`--${m}`)) ?? 'mock';
-const { rail, payees, label, paywall, explorer, balance } = setUp(mode);
+const mode = ['near-guard', 'near', 'arc-x402', 'arc', 'gateway'].find((m) => process.argv.includes(`--${m}`)) ?? 'mock';
+const { rail, payees, label, paywall, explorer, balance, showBalance } = setUp(mode);
 await new Promise((resolve) => paywall.listen(0, '127.0.0.1', resolve));
 const base = `http://127.0.0.1:${paywall.address().port}`;
 
@@ -145,10 +159,9 @@ for (const name of PLAN) {
 
 console.log(dim(`\nspent today ${formatUsd(guard.ledger.spentToday(Date.now()))} of $1.00; ${guard.ledger.entries.filter((e) => e.status !== 'paid').length} payments stopped`));
 if (balance) {
-  // USDC has 6 decimals, so atomic units are micro-dollars. With x402 exact the difference is the
-  // payments alone: the paywall paid the gas.
   const after = await balance();
-  console.log(dim(`agent wallet ${formatUsd(before)} → ${formatUsd(after)} USDC (${formatUsd(after - before)})`));
+  const paid = guard.ledger.entries.filter((e) => e.status === 'paid').reduce((sum, e) => sum + e.intent.amount, 0n);
+  console.log(dim(showBalance(before, after, paid)));
 }
 paywall.close();
 if (dashboard) console.log(dim('dashboard stays up; Ctrl+C to stop'));
