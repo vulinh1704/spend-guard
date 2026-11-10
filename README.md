@@ -200,6 +200,7 @@ node demo/agent.js --dashboard           # the offline demo, paced for watching;
 ```
 npm ci
 npm test                                 # 204 tests, offline: no network, no keys
+(cd contracts/near-guard && cargo test)  # 22 contract tests, offline (Rust 1.95+)
 node demo/agent.js                       # offline demo, mock payments
 ```
 
@@ -211,6 +212,7 @@ You need Node 22.22.2 or later, because `near-api-js` 7 does (Circle's SDK needs
 | `node demo/agent.js --arc-x402` | the above, plus `node scripts/arc-facilitator.js` |
 | `node demo/agent.js --gateway` | the above, plus `node scripts/gateway-deposit.js 1` |
 | `node demo/agent.js --near` | `node scripts/near-testnet-account.js` and `node scripts/near-demo-payees.js` |
+| `node demo/agent.js --near-guard` | the above, plus `node scripts/near-guard-deploy.js` |
 
 Add `--dashboard` to any of them to watch on the live page.
 
@@ -248,19 +250,21 @@ Spend Guard is my entry to [NEAR HACKATHON](https://nearhackathon.com), in the t
 
 ### What NEAR does here
 
-The agent pays in native NEAR from its own testnet account, and the paywall reads every payment back from the chain before it serves the data.
+The agent pays in native NEAR on testnet in one of two ways: from its own account (`--near`), or through a guard contract that holds the NEAR, where the agent has only a function-call key for `pay()` (`--near-guard`). Either way, the paywall reads every payment back from the chain before it serves the data.
 
 - `src/rails/near.js`: `NearRail` sends a NEAR transfer only for a payment the guard has already approved, to the approved account and for the approved amount. It keeps the hash of the transaction it signed, so a transfer that was sent but lost in an RPC timeout is recorded as `unconfirmed` and still counts against the budget. `checkNearPayment` is the paywall's side: it fetches the transaction with all its receipts from NEAR RPC (`EXPERIMENTAL_tx_status`) and adds up the transfers to the expected account that succeeded, which must come to at least the price.
 - Named accounts make the payee check easy to read. The demo paywall is `sg-paywall-<id>.testnet`, with one sub-account per service (`weather.`, `news.`, `quotes.`, `maps.`) and the look-alike `rnaps.` that the bad `/maps` endpoint switches to. `scripts/near-testnet-account.js` and `scripts/near-demo-payees.js` create them on testnet.
 - `node demo/agent.js --near` runs the test agent against that paywall with real testnet transfers and links each one on testnet.nearblocks.io. `spend-guard mcp` runs the same rail with `SPEND_GUARD_RAILS=near`.
-- `test/near.test.js` covers the rail and the paywall check offline.
-- `node scripts/near-verify.js` checks a recorded testnet run with no key and no account: it reads each transaction of [docs/near-testnet-run.md](docs/near-testnet-run.md) from a public archival RPC and runs the paywall's check on it.
+- `contracts/near-guard` is a Rust contract (near-sdk 5) that holds the agent's NEAR. Its `pay(receiver, amount)` pays only accounts on the owner's allowlist, at most a per-payment cap, and at most a daily cap per UTC day. Changing the allowlist or the caps, pausing and withdrawing are for the owner only, and each needs 1 yoctoNEAR attached, which a function-call key can't attach. `NearGuardRail` in `src/rails/near.js` pays through it with the agent's function-call key, which may call `pay` on the guard account and nothing else. The built wasm and its sha256 are committed (`contracts/near-guard/res`).
+- `scripts/near-guard-deploy.js` creates `guard.<your account>`, deploys that wasm, sets the policy and adds the agent's key. `scripts/near-guard-stolen-key.js` then plays someone who stole that key and goes straight to the chain. The contract refuses the look-alike payee and both caps, and NEAR itself rejects a plain transfer, `withdraw` and adding a key. The recorded run is in [docs/near-testnet-run.md](docs/near-testnet-run.md#the-guard-contract-deployed-10-nov-2026-0346-utc), on `guard.spend-guard-bbeb82.testnet`.
+- `test/near.test.js` covers both rails and the paywall check offline, and `cargo test` in `contracts/near-guard` runs the contract's 22 unit tests.
+- `node scripts/near-verify.js` checks the recorded testnet runs with no key and no account. It reads each transaction in [docs/near-testnet-run.md](docs/near-testnet-run.md) from a public archival RPC and runs the paywall's check on it. It checks that the guard's refusals failed with the contract's own reason. It also checks that the code on `guard.spend-guard-bbeb82.testnet` is the committed wasm, and that the agent's key there may only call `pay`.
 
-**Where it sits.** NEAR's Agent Connect gives an agent "its own account on NEAR Intents, acting within rules its owner signs", and other projects put spending caps in a contract. Both decide from the payment itself. Spend Guard decides earlier, at the HTTP 402, from what only the client sees there: the endpoint's usual price, the payee accounts each service may use, and a person's Approve for anything large or unknown. The layers fit together: a cap on chain bounds what a stolen key can spend, and the guard stops a bad payment that is still under the cap.
+**Where it sits.** NEAR's Agent Connect gives an agent "its own account on NEAR Intents, acting within rules its owner signs", and other projects put spending caps in a contract. Rules like these, and Spend Guard's own guard contract, decide from the payment itself. The off-chain guard decides earlier, at the HTTP 402, from what only the client sees there: the endpoint's usual price, the payee accounts each service may use, and a person's Approve for anything large or unknown. The two layers fit together. The contract bounds what a stolen key can spend, and the off-chain guard stops a bad payment that is still under the cap.
 
 Also built in the window, and not specific to NEAR: the guard itself (policy, ledger, approvals), the x402 client, the dashboard, the MCP server and the npm package. The rails for USDC on Circle's Arc testnet (plain transfer, x402 `exact`, Circle Gateway, Circle Wallets) were built in the same window for Circle's chain. They are not part of the NEAR integration.
 
-Libraries: `near-api-js` (the NEAR rail), `viem` (EVM address checks and the Arc rails), Circle's `@circle-fin/developer-controlled-wallets` and `@circle-fin/x402-batching` (Arc rails only), and `@modelcontextprotocol/sdk` (tests and the MCP demo script only). [Mantis](https://github.com/vulinh1704/mantis), my own UI checker and a separate project, checks the dashboard's layout in `scripts/check-dashboard.sh`. It is not shipped and is not part of this entry.
+Libraries: `near-api-js` (the NEAR rails and scripts), `near-sdk` (the guard contract, built with `cargo-near`), `viem` (EVM address checks and the Arc rails), Circle's `@circle-fin/developer-controlled-wallets` and `@circle-fin/x402-batching` (Arc rails only), and `@modelcontextprotocol/sdk` (tests and the MCP demo script only). [Mantis](https://github.com/vulinh1704/mantis), my own UI checker and a separate project, checks the dashboard's layout in `scripts/check-dashboard.sh`. It is not shipped and is not part of this entry.
 
 ### Run the NEAR testnet demo
 
@@ -268,7 +272,7 @@ You need git and Node 22.22.2 or later. Testnet NEAR has no value. Never use a m
 
 1. Get the code: `git clone https://github.com/vulinh1704/spend-guard && cd spend-guard && git checkout near-hackathon-2026 && npm ci`
 2. Offline first, with no keys. `npm test` → 204 tests pass. `node demo/agent.js` → 8 paid calls, a 40x price spike denied, a payment to `rnaps.paywall.testnet` denied, the $0.30 `/report` declined, and `spent today $0.10 of $1.00; 3 payments stopped`.
-3. Check a recorded run, still with no keys: `node scripts/near-verify.js` → nine `✓` lines and `every check passed`. They are the eight transfers of the 30 Oct 2026 run, each read from the chain, and the look-alike `rnaps.sg-paywall-25135e.testnet` still holding only the 0.05 NEAR it was created with.
+3. Check the recorded runs, still with no keys: `node scripts/near-verify.js` → one `✓` line per check and `every check passed`. The checks are the transfers of the recorded runs, each read from the chain, and the look-alike `rnaps.sg-paywall-25135e.testnet` still holding only the 0.05 NEAR it was created with. They also cover the guard contract's three refusals, its code hash, its policy and the agent key's permission. The contract's own tests need Rust 1.95 or later: `cd contracts/near-guard && cargo test` → 22 tests pass.
 4. `node scripts/near-testnet-account.js` → `created spend-guard-<id>.testnet; key written to .env`. It refuses to run if `.env` already exists.
 5. `node scripts/near-demo-payees.js` → five lines `created <name>.sg-paywall-<id>.testnet`, the last one for `rnaps`.
 6. `node demo/agent.js --near --dashboard`, then open http://localhost:4400 →
@@ -278,6 +282,9 @@ You need git and Node 22.22.2 or later. Testnet NEAR has no value. Never use a m
    - The $0.30 `/report` waits on the dashboard for Approve or Deny, and is declined after 120 seconds. Approve sends 0.12 testnet NEAR.
    - The last line, `agent account <before> → <after> NEAR (…: 0.040000 paid, … gas)`, reads the agent account's balance from the chain before and after the run, and splits the difference into the payments and the gas.
    - Press Ctrl+C to stop the dashboard.
+7. `node scripts/near-guard-deploy.js` → `deployed contracts/near-guard/res/spend_guard_near.wasm (sha256 5zH4VraYSfVk5BWgQciXiTMZb4P51oiDFSa4VNjwqRTM) …`, the allowlist without `rnaps.`, the caps (0.15 NEAR per payment, 0.25 NEAR a day), and the agent's key, written to `.env`. It moves 2.5 testnet NEAR from your account into the guard, and most of that pays for the contract's storage.
+8. `node demo/agent.js --near-guard` → the same calls and refusals as step 6, but each payment is a `pay()` call on the guard. The paywall finds the transfer among the call's receipts. The last line is the guard account's balance before and after.
+9. `node scripts/near-guard-stolen-key.js` → signs with the agent's key alone. You get `✗ refused on chain` for the look-alike payee, for 1 yoctoNEAR over the per-payment cap, and for a payment after the day's cap is used. Each of those has a NearBlocks link. Before the last one it pays the allowed `weather.` account whatever is left of the day's cap, which a stolen key can still do. `✗ rejected by NEAR, no transaction` for a plain transfer, `withdraw`, `pay()` with a deposit and adding a full-access key.
 
 A run without Approve spends $0.10 at the demo rate (0.04 testnet NEAR), plus gas. Both setup scripts create accounts through the public testnet helper at `helper.nearprotocol.com`. If it is down, step 4 prints the other way NEAR's FAQ gives for test NEAR (Q-008): make a testnet account in a wallet, fund it at near-faucet.io and write `.env` by hand. Step 5 then makes the paywall a sub-account of that account (`--no-faucet` does this on purpose). Steps 1 to 3 need no account at all.
 
@@ -288,7 +295,9 @@ A run without Approve spends $0.10 at the demo rate (0.04 testnet NEAR), plus ga
 - The MCP server is local (stdio) only, and there is no hosted demo. It needs Node 22.22.2 or later, because `near-api-js` 7 does.
 - The demo agent is a scripted test agent, not a model. With an MCP client the model calls `pay_and_fetch`, but the repository has no NEAR demo paywall for that path yet: `scripts/mcp-demo.js` covers the mock and Arc rails.
 - NEAR prices convert from dollars at a fixed $2.50 (`ASSETS` in `src/money.js`), so dollar limits on NEAR are approximate.
-- The agent's account signs with a full-access key, because a function-call key can't send a NEAR transfer. Keep only what the agent may spend in that account. The guard limits what the agent pays through it. Code that holds the key can still pay without it.
+- With `--near`, the agent's account signs with a full-access key, because a function-call key can't send a NEAR transfer. Code that holds that key can pay without the guard. With `--near-guard`, the agent holds only a function-call key, but someone who steals it can still pay the allowed accounts up to the day's cap. The key's gas allowance (0.25 NEAR in the demo) is charged to the guard's balance, so it can also spend that much on gas. The owner's key is a full-access key on the guard account, so the owner can redeploy the contract.
+- The daily cap counts per UTC day, not over a rolling 24 hours. The contract's caps are in NEAR, and the off-chain guard's limits are in dollars.
+- The MCP server has no guard-contract rail yet: `SPEND_GUARD_RAILS=near` is the plain rail.
 - A transfer proof works for whoever sends it to the paywall first, and the demo paywall remembers used proofs only while it runs. Both are listed in [docs/threat-model.md](docs/threat-model.md#known-gaps).
 - No NEAR Intents, Chain Signatures or NEAR AI integration yet.
 
