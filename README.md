@@ -1,6 +1,6 @@
 # Spend Guard
 
-**A spending guard for AI agents that pay for APIs in USDC.**
+**A spending guard for AI agents that pay for APIs in USDC and NEAR.**
 
 ![An agent pays a paywall on Arc testnet. Spend Guard refuses a $0.40 price spike and a payment to an unknown address, then a $0.30 payment waits on the dashboard until a person clicks Approve.](docs/img/demo.gif)
 
@@ -199,7 +199,7 @@ node demo/agent.js --dashboard           # the offline demo, paced for watching;
 
 ```
 npm ci
-npm test                                 # 189 tests, offline: no network, no keys
+npm test                                 # 204 tests, offline: no network, no keys
 node demo/agent.js                       # offline demo, mock payments
 ```
 
@@ -250,10 +250,13 @@ Spend Guard is my entry to [NEAR HACKATHON](https://nearhackathon.com), in the t
 
 The agent pays in native NEAR from its own testnet account, and the paywall reads every payment back from the chain before it serves the data.
 
-- `src/rails/near.js`: `NearRail` sends a NEAR transfer only for a payment the guard has already approved, to the approved account and for the approved amount. It keeps the hash of the transaction it signed, so a transfer that was sent but lost in an RPC timeout is recorded as `unconfirmed` and still counts against the budget. `checkNearPayment` is the paywall's side: it fetches the transaction from NEAR RPC and checks that it succeeded, went to the expected account and deposited at least the price.
+- `src/rails/near.js`: `NearRail` sends a NEAR transfer only for a payment the guard has already approved, to the approved account and for the approved amount. It keeps the hash of the transaction it signed, so a transfer that was sent but lost in an RPC timeout is recorded as `unconfirmed` and still counts against the budget. `checkNearPayment` is the paywall's side: it fetches the transaction with all its receipts from NEAR RPC (`EXPERIMENTAL_tx_status`) and adds up the transfers to the expected account that succeeded, which must come to at least the price.
 - Named accounts make the payee check easy to read. The demo paywall is `sg-paywall-<id>.testnet`, with one sub-account per service (`weather.`, `news.`, `quotes.`, `maps.`) and the look-alike `rnaps.` that the bad `/maps` endpoint switches to. `scripts/near-testnet-account.js` and `scripts/near-demo-payees.js` create them on testnet.
 - `node demo/agent.js --near` runs the test agent against that paywall with real testnet transfers and links each one on testnet.nearblocks.io. `spend-guard mcp` runs the same rail with `SPEND_GUARD_RAILS=near`.
 - `test/near.test.js` covers the rail and the paywall check offline.
+- `node scripts/near-verify.js` checks a recorded testnet run with no key and no account: it reads each transaction of [docs/near-testnet-run.md](docs/near-testnet-run.md) from a public archival RPC and runs the paywall's check on it.
+
+**Where it sits.** NEAR's Agent Connect gives an agent "its own account on NEAR Intents, acting within rules its owner signs", and other projects put spending caps in a contract. Both decide from the payment itself. Spend Guard decides earlier, at the HTTP 402, from what only the client sees there: the endpoint's usual price, the payee accounts each service may use, and a person's Approve for anything large or unknown. The layers fit together: a cap on chain bounds what a stolen key can spend, and the guard stops a bad payment that is still under the cap.
 
 Also built in the window, and not specific to NEAR: the guard itself (policy, ledger, approvals), the x402 client, the dashboard, the MCP server and the npm package. The rails for USDC on Circle's Arc testnet (plain transfer, x402 `exact`, Circle Gateway, Circle Wallets) were built in the same window for Circle's chain. They are not part of the NEAR integration.
 
@@ -264,17 +267,19 @@ Libraries: `near-api-js` (the NEAR rail), `viem` (EVM address checks and the Arc
 You need git and Node 22.22.2 or later. Testnet NEAR has no value. Never use a mainnet key here.
 
 1. Get the code: `git clone https://github.com/vulinh1704/spend-guard && cd spend-guard && git checkout near-hackathon-2026 && npm ci`
-2. Offline first, with no keys. `npm test` → 189 tests pass. `node demo/agent.js` → 8 paid calls, a 40x price spike denied, a payment to `rnaps.paywall.testnet` denied, the $0.30 `/report` declined, and `spent today $0.10 of $1.00; 3 payments stopped`.
-3. `node scripts/near-testnet-account.js` → `created spend-guard-<id>.testnet; key written to .env`. It refuses to run if `.env` already exists.
-4. `node scripts/near-demo-payees.js` → five lines `created <name>.sg-paywall-<id>.testnet`, the last one for `rnaps`.
-5. `node demo/agent.js --near --dashboard`, then open http://localhost:4400 →
+2. Offline first, with no keys. `npm test` → 204 tests pass. `node demo/agent.js` → 8 paid calls, a 40x price spike denied, a payment to `rnaps.paywall.testnet` denied, the $0.30 `/report` declined, and `spent today $0.10 of $1.00; 3 payments stopped`.
+3. Check a recorded run, still with no keys: `node scripts/near-verify.js` → nine `✓` lines and `every check passed`. They are the eight transfers of the 30 Oct 2026 run, each read from the chain, and the look-alike `rnaps.sg-paywall-25135e.testnet` still holding only the 0.05 NEAR it was created with.
+4. `node scripts/near-testnet-account.js` → `created spend-guard-<id>.testnet; key written to .env`. It refuses to run if `.env` already exists.
+5. `node scripts/near-demo-payees.js` → five lines `created <name>.sg-paywall-<id>.testnet`, the last one for `rnaps`.
+6. `node demo/agent.js --near --dashboard`, then open http://localhost:4400 →
    - `✓ paid $0.01 /weather … https://testnet.nearblocks.io/txns/<hash>`: a real transfer of 0.004 testnet NEAR from your agent account to `weather.sg-paywall-<id>.testnet`. Prices are set in dollars and converted at a fixed $2.50 per NEAR.
    - `✗ denied /quotes $0.40 is 40x the usual $0.01 …`: refused before signing, so there is no transaction.
    - `✗ denied /maps … asked to be paid at rnaps.sg-paywall-<id>.testnet, which is not one of its known addresses`: refused before signing. The `rnaps.` account still holds only the 0.05 NEAR it was created with.
    - The $0.30 `/report` waits on the dashboard for Approve or Deny, and is declined after 120 seconds. Approve sends 0.12 testnet NEAR.
+   - The last line, `agent account <before> → <after> NEAR (…: 0.040000 paid, … gas)`, reads the agent account's balance from the chain before and after the run, and splits the difference into the payments and the gas.
    - Press Ctrl+C to stop the dashboard.
 
-A run without Approve spends $0.10 at the demo rate (0.04 testnet NEAR), plus gas. Both setup scripts create accounts through the public testnet helper at `helper.nearprotocol.com`. If it is down, steps 1 and 2 still show every rule offline.
+A run without Approve spends $0.10 at the demo rate (0.04 testnet NEAR), plus gas. Both setup scripts create accounts through the public testnet helper at `helper.nearprotocol.com`. If it is down, step 4 prints the other way NEAR's FAQ gives for test NEAR (Q-008): make a testnet account in a wallet, fund it at near-faucet.io and write `.env` by hand. Step 5 then makes the paywall a sub-account of that account (`--no-faucet` does this on purpose). Steps 1 to 3 need no account at all.
 
 ### Limits
 
