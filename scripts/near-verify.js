@@ -41,31 +41,46 @@ const fail = (line) => {
   console.log(`✗ ${line}`);
 };
 
-/** One JSON-RPC call, trying each archival node in turn when one is down. */
+/**
+ * One JSON-RPC call, trying each archival node in turn when one is down or busy, and the whole
+ * list again after a pause. Public nodes rate-limit, so calls are also spaced out a little.
+ */
 async function rpc(method, params) {
   let last;
-  for (const url of urls) {
-    try {
-      const res = await fetch(url, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ jsonrpc: '2.0', id: 'near-verify', method, params }),
-        signal: AbortSignal.timeout(20_000),
-      });
-      const body = await res.json();
-      if (body.error) {
-        // The node answered: the error is about the request (an unknown transaction, say), so
-        // another node would say the same.
+  for (let round = 0; round < 3; round++) {
+    if (round) await sleep(3000 * round);
+    for (const url of urls) {
+      await sleep(250);
+      try {
+        const res = await fetch(url, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ jsonrpc: '2.0', id: 'near-verify', method, params }),
+          signal: AbortSignal.timeout(20_000),
+        });
+        const body = await res.json().catch(() => ({ error: { message: `HTTP ${res.status}` } }));
+        if (!body.error) return body.result;
+        const message = body.error.data ?? body.error.message;
         const cause = body.error.cause?.name ?? body.error.name;
-        throw Object.assign(new Error(`${cause}: ${body.error.data ?? body.error.message}`), { answered: true });
+        // A busy or failing node: another one, or the same one later, may answer.
+        if (res.status === 429 || res.status >= 500 || !cause || /rate limit|timeout|unavailable/i.test(String(message))) {
+          last = new Error(`${url}: ${message}`);
+          continue;
+        }
+        // The node answered about the request itself (an unknown transaction, say): another
+        // node would say the same.
+        throw Object.assign(new Error(`${cause}: ${message}`), { answered: true });
+      } catch (err) {
+        if (err.answered) throw err;
+        last = err;
       }
-      return body.result;
-    } catch (err) {
-      if (err.answered) throw err;
-      last = err;
     }
   }
   throw new Error(`no RPC answered (${urls.join(', ')}): ${last?.message}`);
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 const txStatus = (hash, signer) => rpc('EXPERIMENTAL_tx_status', { tx_hash: hash, sender_account_id: signer, wait_until: 'NONE' });
