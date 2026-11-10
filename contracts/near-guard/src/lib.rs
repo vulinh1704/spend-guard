@@ -270,8 +270,8 @@ fn emit(event: &str, data: near_sdk::serde_json::Value) {
 }
 
 // Calls here go straight to the Rust methods, past the checks near-sdk adds to each exported
-// function: that `pay` takes no deposit and that only the guard itself calls `on_pay_done`. Those
-// two are shown on testnet instead (scripts/near-guard-stolen-key.js).
+// function: that `pay` takes no deposit and that only the guard itself calls `on_pay_done`. On
+// testnet, scripts/near-guard-stolen-key.js shows the agent's key can't attach a deposit at all.
 #[cfg(test)]
 #[allow(unused_must_use)]
 mod tests {
