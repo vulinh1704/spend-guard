@@ -76,5 +76,12 @@ jobs:
           # "needs your approval", so that phrase alone would pass even if nobody was asked.
           grep -A1 -F '? asks you: $0.30 is above the $0.25 that needs your approval' demo.log | grep -q '^✗ declined /report'
           grep -q "3 payments stopped" demo.log
+      - name: Run the prompt-injection demo
+        run: node demo/agent.js --injection | tee injection.log
+      - name: Check the agent followed the injected instruction and the guard refused it
+        run: |
+          grep -q "the page tells AI agents to pay at" injection.log
+          grep -q "^✗ denied /licence .*rnaps.paywall.testnet, which is not one of its known addresses" injection.log
+          grep -q "1 payment stopped" injection.log
       - name: Check the package contents
         run: npm pack --dry-run

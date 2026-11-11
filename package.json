@@ -57,6 +57,7 @@
     "demo": "node demo/agent.js",
     "demo:dashboard": "node demo/agent.js --dashboard",
     "demo:near": "node demo/agent.js --near --dashboard",
+    "demo:injection": "node demo/agent.js --injection",
     "demo:arc": "node demo/agent.js --arc --dashboard",
     "demo:arc-x402": "node demo/agent.js --arc-x402 --dashboard",
     "demo:gateway": "node demo/agent.js --gateway --dashboard",
