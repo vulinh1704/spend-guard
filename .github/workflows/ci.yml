@@ -50,7 +50,7 @@ jobs:
       - name: Install the toolchain in rust-toolchain.toml
         run: rustup toolchain install
       - run: cargo test --locked
-      - run: sha256sum -c res/SHA256SUMS
+      - run: sha256sum -c SHA256SUMS
         working-directory: contracts/near-guard/res
 
   demo:
