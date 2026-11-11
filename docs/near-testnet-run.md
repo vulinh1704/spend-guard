@@ -6,7 +6,7 @@ These are real runs of the demo on NEAR testnet. Anyone can check them without a
 node scripts/near-verify.js
 ```
 
-The script reads the JSON block at the end of this page. It fetches each transaction with its receipts from a public archival RPC (a regular RPC node forgets transactions after a few days) and runs the same check the demo paywall runs before it serves data (`nearPaymentProblem` in `src/rails/near.js`). It also reads the balances listed there, and checks that each one is still what this page says. For the guard contract, it checks that the code on chain is the committed `contracts/near-guard/res/spend_guard_near.wasm` (same sha256), that its policy is the one below, that the refused calls failed with the contract's own reason, and that the agent's key on the guard account may only call `pay()`. It prints one line per check and exits with 1 if any check fails.
+The script reads the JSON block at the end of this page. It fetches each transaction with its receipts from a public archival RPC (a regular RPC node forgets transactions after a few days) and runs the same check the demo paywall runs before it serves data (`nearPaymentProblem` in `src/rails/near.js`). It also reads the balances listed there, and checks that each one is still what this page says. For the guard contract, it checks that the code on chain is the committed `contracts/near-guard/res/spend_guard_near.wasm` (same sha256), that its policy is the one below, that the refused calls failed with the contract's own reason, and that the agent's key on the guard account may only call `pay()`. For the NEAR Intents Agent API runs, it adds up the Intents verifier's own `mt_transfer` events in each transaction (`intentsPaymentProblem` in `src/rails/intents.js`). It prints one line per check and exits with 1 if any check fails.
 
 ## `node demo/agent.js --near`, 30 Oct 2026, 17:49 UTC
 
@@ -107,6 +107,53 @@ So a stolen agent key could still pay the allowed accounts up to the day's cap: 
 
 The script's first run, on 10 Nov 2026 at 03:47 UTC after the `--near-guard` demo above, got the same three refusals from the contract ([`BeMwBR9L…`](https://testnet.nearblocks.io/txns/BeMwBR9LYFu5y5zos1YJCRMsthTNi7praS1iRV6ybaEi), [`H9geFseW…`](https://testnet.nearblocks.io/txns/H9geFseWeP7z2C5Sqca73grsM1TfZTCZgv3zuSPB6wNX), [`EsNspDom…`](https://testnet.nearblocks.io/txns/EsNspDomuB5camR2kEtUyM7gP1GYQob9Wxe1nv6L9FE1)) and paid `weather.` 0.15 and 0.06 NEAR ([`8M9TQcRP…`](https://testnet.nearblocks.io/txns/8M9TQcRPFegxxnbNbK1ykLa1GfxJZyG3nMbgzSN9btUV), [`7uwjnL2r…`](https://testnet.nearblocks.io/txns/7uwjnL2rW9fQSao52zoGJiFxS1jHLmFnJycV1tpdHZNk)). The script checks those too.
 
+## NEAR Intents Agent API on Tidepool's community testnet, 11 Nov 2026, 03:44 UTC
+
+These runs pay through the [NEAR Intents Agent API](https://docs.agentsonintents.com/integration/agent-api/overview) as Tidepool implements it on NEAR testnet (`https://www.usetidepool.tech`, community-run, not NEAR's; the official API is mainnet-only). Payments are transfers of Tidepool's test USDC (`nep141:usdc.tidepool-sandbox.testnet`) inside the Intents verifier `verifier.tidepool-sandbox.testnet`, from the agent's wallet `453c3a88…2aaf` to the paywall's accounts. Tidepool's relayer `maker.tidepool-sandbox.testnet` signs the transactions. The paywall checked each one by the verifier's NEP-245 `mt_transfer` event, read from NEAR RPC.
+
+`node scripts/intents-agent-setup.js` (03:28 UTC) created agent `agent_3b5f457af2582f8225987dc1` with a throwaway owner key and this owner-signed policy: transfers of test USDC only, only to `weather.`, `news.`, `quotes.` and `maps.sg-paywall-25135e.testnet`, at most $0.50 per transfer and $1.00 a day. Tidepool's faucet only drips to accounts at least a day old, so the test USDC went to `spend-guard-bbeb82.testnet` first, and `node scripts/intents-agent-fund.js --usdc=5` moved $5.00 of it to the agent with an `mt_transfer` on the verifier ([`4NxK2o5o…`](https://testnet.nearblocks.io/txns/4NxK2o5oCksGm2JQy6gwtcSDTz11YKjmrBACRNrwUBRW)).
+
+### `node demo/agent.js --intents`, 03:44 UTC
+
+The same calls and refusals as the other runs: the price spike and the look-alike payee were refused before the Agent API was called, and `/report` was declined. The last line was `agent wallet $5.00 → $4.90 test USDC (-$0.10)`.
+
+| Call | Paid to | test USDC | Transaction |
+|---|---|---|---|
+| `/weather` | `weather.` | 0.01 | [`gSi728dn…`](https://testnet.nearblocks.io/txns/gSi728dnsCx4n5ePHbptFLZz6q18QzZmKFrQimytEbx) |
+| `/news` | `news.` | 0.02 | [`EMYcCNWX…`](https://testnet.nearblocks.io/txns/EMYcCNWXvqHjPX12P6eyaKhd55MUhwfqnQusUgoWTzSi) |
+| `/quotes` | `quotes.` | 0.01 | [`ANgBP4K8…`](https://testnet.nearblocks.io/txns/ANgBP4K8wGucJ9naukvxKtTB6QqyehzetNpnjrooDuW7) |
+| `/quotes` | `quotes.` | 0.01 | [`8L1p4V6M…`](https://testnet.nearblocks.io/txns/8L1p4V6MPGNqoH8EsvS6VTJLVvjpaTP7RfrBe8MMk2m1) |
+| `/quotes` | `quotes.` | 0.01 | [`95jmWSc1…`](https://testnet.nearblocks.io/txns/95jmWSc1jv6sPZGprAT44yF6kh4mGq3kCT4qbD693jb3) |
+| `/maps` | `maps.` | 0.015 | [`5jEk2b9w…`](https://testnet.nearblocks.io/txns/5jEk2b9w6yMZUi6GzJaQQKoSpXoSMjJE6PFDAeETGTtq) |
+| `/maps` | `maps.` | 0.015 | [`CAjF1TaL…`](https://testnet.nearblocks.io/txns/CAjF1TaLCDY8JtP4nBUDarhZrcCyoQoose92NEJB3NhT) |
+| `/weather` | `weather.` | 0.01 | [`Cymow5xA…`](https://testnet.nearblocks.io/txns/Cymow5xAcmpKJcL11GTLhFsMEreZFfeP9vdQ4YZcAB8n) |
+
+### `node scripts/mcp-demo.js --intents`, 03:45 UTC
+
+The MCP server with `SPEND_GUARD_RAILS=intents`, given only the agent's API key, agent id, grant and wallet account. The scripted client followed the injected note on `/guide`, and `pay_and_fetch` refused `/licence` and the swapped `/maps` payee before the API was called. `/report` was declined (`APPROVAL_TIMEOUT=10`).
+
+| Call | Paid to | test USDC | Transaction |
+|---|---|---|---|
+| `/weather` | `weather.` | 0.01 | [`BdQFa6Fj…`](https://testnet.nearblocks.io/txns/BdQFa6FjGUoWSFkJWLedArkCknHNto7BNcRUTbfnFjj5) |
+| `/news` | `news.` | 0.02 | [`2Qtupcin…`](https://testnet.nearblocks.io/txns/2QtupcintHqWhYnJcZkqx1ajyh9fYan7umZFPxzFxq1s) |
+| `/maps` | `maps.` | 0.015 | [`81Ab1dnb…`](https://testnet.nearblocks.io/txns/81Ab1dnbJuZsaMVUGLT1dihkoTo4HjFTEHRt18cpZGTM) |
+| `/maps` | `maps.` | 0.015 | [`C6nCHuSX…`](https://testnet.nearblocks.io/txns/C6nCHuSXCe5Nvaa8kT92m9ugxZcWF5ge4LxmqJdZEjBy) |
+
+### `node scripts/intents-leaked-grant.js`, 03:45 UTC
+
+This script calls the Agent API with the agent's API key and grant alone, past Spend Guard. That is what someone who stole them could do. The owner's policy refused every attempt below before anything moved, so they have no transactions. The API checks the policy itself, off-chain on Tidepool.
+
+| Attempt | Result |
+|---|---|
+| transfer $0.01 to `rnaps.sg-paywall-25135e.testnet` | refused: `policy_destination_denied`, "The policy does not allow sending to rnaps.sg-paywall-25135e.testnet" |
+| transfer $0.51 to `weather.` | refused: `policy_transaction_limit_exceeded`, "Amount exceeds the per-transaction limit of 500000" |
+| withdraw $0.01 to `rnaps.` | refused: `policy_action_denied`, "The policy does not allow \"withdraw\"" |
+| swap $0.01 of USDC for USDT | refused: `policy_action_denied` |
+| change the policy to allow any destination, signed with another key | refused: `owner_signature_invalid`, "signed_data.public_key is not the owner key of this agent" |
+| transfer $0.01 to `weather.` | still allowed, within the policy: [`HRWi1hmL…`](https://testnet.nearblocks.io/txns/HRWi1hmLzh1CcGbTJ4CFx4nQUHD6vMmpF129Bgim3n21) |
+
+So a leaked grant could still pay the allowed payees within the policy's limits: the API reported $0.169923 of the day's $1.00 budget used after these runs (it prices test USDC at about $0.9995). It could not pay `rnaps.`, go past the per-transaction limit, withdraw, swap or change the policy.
+
 ## What the script checks
 
 ```json near-verify
@@ -139,6 +186,22 @@ The script's first run, on 10 Nov 2026 at 03:47 UTC after the `--near-guard` dem
     {"hash": "7jmpGTvmLXyDKU8QzyL4DAFJ59LGRbkiwmihLBHS6ywD", "signer": "guard.spend-guard-bbeb82.testnet", "payTo": "maps.sg-paywall-25135e.testnet", "amount": "6000000000000000000000"},
     {"hash": "FcsQ3FBWf3Egfrdko7zkqcPwvje2BXEAX4Y5uTEy91My", "signer": "guard.spend-guard-bbeb82.testnet", "payTo": "weather.sg-paywall-25135e.testnet", "amount": "150000000000000000000000"},
     {"hash": "B9kG7NmErgTbLjF8kew3H1jLRPYeaPjfHvYCM5b96o7g", "signer": "guard.spend-guard-bbeb82.testnet", "payTo": "weather.sg-paywall-25135e.testnet", "amount": "64000000000000000000000"}
+  ],
+  "intents": [
+    {"hash": "4NxK2o5oCksGm2JQy6gwtcSDTz11YKjmrBACRNrwUBRW", "signer": "spend-guard-bbeb82.testnet", "sender": "spend-guard-bbeb82.testnet", "payTo": "453c3a8887e1c24d31dfe6674e205700e004d2cc4775034dccc180e9b4642aaf", "amount": "5000000"},
+    {"hash": "gSi728dnsCx4n5ePHbptFLZz6q18QzZmKFrQimytEbx", "signer": "maker.tidepool-sandbox.testnet", "sender": "453c3a8887e1c24d31dfe6674e205700e004d2cc4775034dccc180e9b4642aaf", "payTo": "weather.sg-paywall-25135e.testnet", "amount": "10000"},
+    {"hash": "EMYcCNWXvqHjPX12P6eyaKhd55MUhwfqnQusUgoWTzSi", "signer": "maker.tidepool-sandbox.testnet", "sender": "453c3a8887e1c24d31dfe6674e205700e004d2cc4775034dccc180e9b4642aaf", "payTo": "news.sg-paywall-25135e.testnet", "amount": "20000"},
+    {"hash": "ANgBP4K8wGucJ9naukvxKtTB6QqyehzetNpnjrooDuW7", "signer": "maker.tidepool-sandbox.testnet", "sender": "453c3a8887e1c24d31dfe6674e205700e004d2cc4775034dccc180e9b4642aaf", "payTo": "quotes.sg-paywall-25135e.testnet", "amount": "10000"},
+    {"hash": "8L1p4V6MPGNqoH8EsvS6VTJLVvjpaTP7RfrBe8MMk2m1", "signer": "maker.tidepool-sandbox.testnet", "sender": "453c3a8887e1c24d31dfe6674e205700e004d2cc4775034dccc180e9b4642aaf", "payTo": "quotes.sg-paywall-25135e.testnet", "amount": "10000"},
+    {"hash": "95jmWSc1jv6sPZGprAT44yF6kh4mGq3kCT4qbD693jb3", "signer": "maker.tidepool-sandbox.testnet", "sender": "453c3a8887e1c24d31dfe6674e205700e004d2cc4775034dccc180e9b4642aaf", "payTo": "quotes.sg-paywall-25135e.testnet", "amount": "10000"},
+    {"hash": "5jEk2b9w6yMZUi6GzJaQQKoSpXoSMjJE6PFDAeETGTtq", "signer": "maker.tidepool-sandbox.testnet", "sender": "453c3a8887e1c24d31dfe6674e205700e004d2cc4775034dccc180e9b4642aaf", "payTo": "maps.sg-paywall-25135e.testnet", "amount": "15000"},
+    {"hash": "CAjF1TaLCDY8JtP4nBUDarhZrcCyoQoose92NEJB3NhT", "signer": "maker.tidepool-sandbox.testnet", "sender": "453c3a8887e1c24d31dfe6674e205700e004d2cc4775034dccc180e9b4642aaf", "payTo": "maps.sg-paywall-25135e.testnet", "amount": "15000"},
+    {"hash": "Cymow5xAcmpKJcL11GTLhFsMEreZFfeP9vdQ4YZcAB8n", "signer": "maker.tidepool-sandbox.testnet", "sender": "453c3a8887e1c24d31dfe6674e205700e004d2cc4775034dccc180e9b4642aaf", "payTo": "weather.sg-paywall-25135e.testnet", "amount": "10000"},
+    {"hash": "BdQFa6FjGUoWSFkJWLedArkCknHNto7BNcRUTbfnFjj5", "signer": "maker.tidepool-sandbox.testnet", "sender": "453c3a8887e1c24d31dfe6674e205700e004d2cc4775034dccc180e9b4642aaf", "payTo": "weather.sg-paywall-25135e.testnet", "amount": "10000"},
+    {"hash": "2QtupcintHqWhYnJcZkqx1ajyh9fYan7umZFPxzFxq1s", "signer": "maker.tidepool-sandbox.testnet", "sender": "453c3a8887e1c24d31dfe6674e205700e004d2cc4775034dccc180e9b4642aaf", "payTo": "news.sg-paywall-25135e.testnet", "amount": "20000"},
+    {"hash": "81Ab1dnbJuZsaMVUGLT1dihkoTo4HjFTEHRt18cpZGTM", "signer": "maker.tidepool-sandbox.testnet", "sender": "453c3a8887e1c24d31dfe6674e205700e004d2cc4775034dccc180e9b4642aaf", "payTo": "maps.sg-paywall-25135e.testnet", "amount": "15000"},
+    {"hash": "C6nCHuSXCe5Nvaa8kT92m9ugxZcWF5ge4LxmqJdZEjBy", "signer": "maker.tidepool-sandbox.testnet", "sender": "453c3a8887e1c24d31dfe6674e205700e004d2cc4775034dccc180e9b4642aaf", "payTo": "maps.sg-paywall-25135e.testnet", "amount": "15000"},
+    {"hash": "HRWi1hmLzh1CcGbTJ4CFx4nQUHD6vMmpF129Bgim3n21", "signer": "maker.tidepool-sandbox.testnet", "sender": "453c3a8887e1c24d31dfe6674e205700e004d2cc4775034dccc180e9b4642aaf", "payTo": "weather.sg-paywall-25135e.testnet", "amount": "10000"}
   ],
   "refused": [
     {"hash": "BeMwBR9LYFu5y5zos1YJCRMsthTNi7praS1iRV6ybaEi", "signer": "guard.spend-guard-bbeb82.testnet", "reason": "rnaps.sg-paywall-25135e.testnet is not on the allowlist"},
