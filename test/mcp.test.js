@@ -16,11 +16,13 @@ import { after, before, describe, test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
+import { KeyPair } from 'near-api-js';
 import { createPaidApi, PAYEES } from '../demo/paid-api.js';
 import { Approvals } from '../src/approval.js';
 import { Guard, PaymentUnconfirmed } from '../src/guard.js';
 import { guardFromEnv, loadLedger, PROTOCOL_VERSIONS, serveMcp, TOOLS, toolRunner } from '../src/mcp.js';
 import { MockRail } from '../src/rails/mock.js';
+import { NearGuardRail } from '../src/rails/near.js';
 
 const BIN = fileURLToPath(new URL('../bin/spend-guard.js', import.meta.url));
 const KNOWN = [PAYEES.weather, PAYEES.news, PAYEES.quotes, PAYEES.maps];
@@ -384,6 +386,53 @@ describe('mcp configuration', () => {
     assert.deepEqual(both.networks, ['arc-testnet', 'arc-testnet-gateway']);
     assert.equal(typeof both.rails.get('arc-testnet-gateway').terms, 'function', 'the Gateway rail picks its own offers');
     await assert.rejects(guardFromEnv({ SPEND_GUARD_LEDGER: 'off', SPEND_GUARD_POLICY: path.join(dir, 'missing.json') }), /cannot read the policy/);
+  });
+
+  test('guardFromEnv: near-guard pays through the guard contract with the agent\'s function-call key', async () => {
+    const key = KeyPair.fromRandom('ed25519').toString();
+    const guard = await guardFromEnv({ SPEND_GUARD_LEDGER: 'off', SPEND_GUARD_RAILS: 'near-guard', NEAR_GUARD_ID: 'guard.owner.testnet', NEAR_GUARD_AGENT_KEY: key });
+    assert.deepEqual(guard.networks, ['near-testnet']);
+    const rail = guard.rails.get('near-testnet');
+    assert.ok(rail instanceof NearGuardRail);
+    assert.equal(rail.guardId, 'guard.owner.testnet');
+    assert.equal(rail.account.accountId, 'guard.owner.testnet', 'it signs as the guard account, with the key it was given');
+
+    await assert.rejects(guardFromEnv({ SPEND_GUARD_LEDGER: 'off', SPEND_GUARD_RAILS: 'near-guard' }), /NEAR_GUARD_ID is not set/);
+    await assert.rejects(guardFromEnv({ SPEND_GUARD_LEDGER: 'off', SPEND_GUARD_RAILS: 'near-guard', NEAR_GUARD_ID: 'guard.owner.testnet' }), /NEAR_GUARD_AGENT_KEY is not set/);
+    // Both pay on near-testnet, and the guard keeps one rail per network.
+    const both = { SPEND_GUARD_LEDGER: 'off', SPEND_GUARD_RAILS: 'near,near-guard', NEAR_ACCOUNT_ID: 'agent.testnet', NEAR_PRIVATE_KEY: key, NEAR_GUARD_ID: 'guard.owner.testnet', NEAR_GUARD_AGENT_KEY: key };
+    await assert.rejects(guardFromEnv(both), /the rails "near" and "near-guard" in SPEND_GUARD_RAILS both pay on near-testnet; keep one/);
+    await assert.rejects(guardFromEnv({ SPEND_GUARD_LEDGER: 'off', SPEND_GUARD_RAILS: 'mock,near-guard', NEAR_GUARD_ID: 'guard.owner.testnet', NEAR_GUARD_AGENT_KEY: key }), /both pay on near-testnet/);
+  });
+
+  test('pay_and_fetch on near-guard: an allowed payment is a pay() call on the guard, and the injected look-alike payee is never signed for', async (t) => {
+    const server = createPaidApi({ network: 'near-testnet', asset: 'near', verify: async () => null });
+    const base = await listen(server);
+    t.after(() => server.close());
+    const policy = path.join(dir, 'near-guard-policy.json');
+    await writeFile(policy, JSON.stringify({ dailyUsd: 1, perPaymentUsd: 0.5, askAboveUsd: 0.25, spikeRatio: 5, services: { [new URL(base).host]: { payTo: KNOWN } } }));
+    const guard = await guardFromEnv({ SPEND_GUARD_LEDGER: 'off', SPEND_GUARD_POLICY: policy, SPEND_GUARD_RAILS: 'near-guard', NEAR_GUARD_ID: 'guard.owner.testnet', NEAR_GUARD_AGENT_KEY: KeyPair.fromRandom('ed25519').toString() });
+    const sent = [];
+    // Stands in for the chain: records what the rail signs and answers as a pay() that went through.
+    guard.rails.get('near-testnet').account.signAndSendTransaction = async ({ receiverId, actions }) => {
+      sent.push({ receiverId, actions });
+      return { status: { SuccessValue: Buffer.from('true').toString('base64') }, transaction: { hash: `tx${sent.length}` } };
+    };
+    const run = toolRunner({ guard });
+
+    assert.match(textOf(await run('pay_and_fetch', { url: `${base}/weather` })), /^HTTP 200 OK\nPaid \$0\.01 to weather\.paywall\.testnet on near-testnet, transaction tx1\./);
+    assert.equal(sent.length, 1);
+    assert.equal(sent[0].receiverId, 'guard.owner.testnet');
+    const call = sent[0].actions[0].functionCall;
+    assert.equal(call.methodName, 'pay');
+    assert.equal(call.deposit, 0n);
+    assert.deepEqual(JSON.parse(Buffer.from(call.args).toString()), { receiver: PAYEES.weather, amount: `4${'0'.repeat(21)}` });
+
+    // Where the injected note on /guide sends the agent: 0.4 NEAR to the look-alike rnaps. account.
+    const refused = await run('pay_and_fetch', { url: `${base}/licence` });
+    assert.equal(refused.isError, true);
+    assert.match(textOf(refused), /^Spend Guard refused this payment, so nothing was paid and the content was not fetched:\n- .+ asked to be paid at rnaps\.paywall\.testnet, which is not one of its known addresses/);
+    assert.equal(sent.length, 1, 'nothing was signed for the refused payment');
   });
 });
 

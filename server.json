@@ -34,7 +34,7 @@
         },
         {
           "name": "SPEND_GUARD_RAILS",
-          "description": "How to pay: mock (pays nothing), near, arc, gateway, or a comma list. arc and gateway need ARC_PRIVATE_KEY, near needs NEAR_ACCOUNT_ID and NEAR_PRIVATE_KEY.",
+          "description": "How to pay: mock (pays nothing), near, near-guard, arc, gateway, or a comma list with one rail per network. arc and gateway need ARC_PRIVATE_KEY, near needs NEAR_ACCOUNT_ID and NEAR_PRIVATE_KEY, near-guard needs NEAR_GUARD_ID and NEAR_GUARD_AGENT_KEY.",
           "default": "mock",
           "isRequired": false
         },
@@ -77,6 +77,17 @@
         {
           "name": "NEAR_PRIVATE_KEY",
           "description": "Agent key for the near rail. Testnet keys only.",
+          "isRequired": false,
+          "isSecret": true
+        },
+        {
+          "name": "NEAR_GUARD_ID",
+          "description": "The guard contract's account for the near-guard rail (testnet). It holds the agent's NEAR.",
+          "isRequired": false
+        },
+        {
+          "name": "NEAR_GUARD_AGENT_KEY",
+          "description": "The agent's function-call key on the guard contract's account, which may only call pay(). Testnet keys only.",
           "isRequired": false,
           "isSecret": true
         }
