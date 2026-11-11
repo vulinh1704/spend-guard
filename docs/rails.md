@@ -7,6 +7,7 @@ A rail moves money on one network. The guard is its only caller: it decides, the
 | `MockRail` | any you pass | any | nothing moves | payee and amount in the proof | works (tests, offline demo) |
 | `NearRail` | `near-testnet` | `near` | native NEAR transfer from the agent's account, signed with a full-access key | `checkNearPayment`: the transfers to the payee among the transaction's receipts | works on NEAR testnet |
 | `NearGuardRail` | `near-testnet` | `near` | a `pay(receiver, amount)` call on Spend Guard's contract, which holds the NEAR and makes the transfer; the agent's function-call key may call `pay` and nothing else | `checkNearPayment`, as for `NearRail`: the transfer the contract made is one of the call's receipts | works on NEAR testnet (`guard.spend-guard-bbeb82.testnet`) |
+| `IntentsAgentRail` | `near-intents-testnet` | `usdc` (Tidepool's test USDC) | a `transfer` inside the NEAR Intents verifier through the NEAR Intents Agent API, with the agent's API key and grant; the owner's signed policy is checked by the API | `checkIntentsPayment`: the verifier's NEP-245 `mt_transfer` events in the transaction | works on Tidepool's community testnet (not run by NEAR) |
 | `ArcRail`, transfer | `arc-testnet` | `usdc` | ERC-20 `transfer` of USDC from the agent's key | `checkArcPayment`: USDC `Transfer` events in the receipt | works on Arc testnet |
 | `ArcRail`, x402 `exact` | `arc-testnet` | `usdc` | signs an EIP-3009 `transferWithAuthorization` and sends nothing; the paywall settles it and pays the gas | `verifyAuthorization`, then `settleAuthorization` | works on Arc testnet, with the demo paywall as its own settler |
 | `GatewayRail` | `arc-testnet-gateway` | `usdc` | signs a Circle Gateway authorization against USDC deposited in the Gateway Wallet; Circle settles in batches | `checkGatewayAuthorization`, then Circle Gateway's settle (`settleGatewayPayment`) | works on Arc testnet, no Circle account needed |
@@ -38,6 +39,7 @@ Rails are imported from their own entry points, so an agent that pays only in US
 ```js
 import { MockRail } from '@vulinh1704/spend-guard/rails/mock';
 import { NearRail, NearGuardRail, checkNearPayment } from '@vulinh1704/spend-guard/rails/near';
+import { IntentsAgentRail, checkIntentsPayment } from '@vulinh1704/spend-guard/rails/intents';
 import { ArcRail, checkArcPayment, arcTestnet, ARC_USDC, ARC_USDC_DOMAIN } from '@vulinh1704/spend-guard/rails/arc';
 import { signAuthorization, verifyAuthorization, settleAuthorization } from '@vulinh1704/spend-guard/rails/eip3009';
 import { GatewayRail, gatewayOffer, checkGatewayAuthorization, settleGatewayPayment } from '@vulinh1704/spend-guard/rails/gateway';
@@ -78,6 +80,20 @@ The agent's NEAR sits in a small contract, `contracts/near-guard` (Rust, near-sd
 - The off-chain guard still decides first: price spikes, unknown services and a person's Approve. The contract is the hard limit under it, and it holds against someone who steals the agent's key and goes straight to the chain.
 - Limits: the key's gas allowance is charged to the guard's balance, so a stolen key can also spend that much on gas. The owner's full-access key on the guard account can redeploy the contract. The caps are in NEAR, and the off-chain guard's limits are in dollars.
 - Setup: `scripts/near-guard-deploy.js` creates `guard.<your account>`, deploys the committed wasm (`contracts/near-guard/res`, with its sha256), calls `new()` with the allowlist and caps and adds the agent's key. `scripts/near-guard-stolen-key.js` plays someone who stole that key. In the MCP server it is `SPEND_GUARD_RAILS=near-guard`.
+
+## NEAR Intents Agent API
+
+```js
+const rail = new IntentsAgentRail({ apiKey: process.env.INTENTS_API_KEY, agentId: process.env.INTENTS_AGENT_ID, grantToken: process.env.INTENTS_GRANT_TOKEN, agentAccount: process.env.INTENTS_AGENT_ACCOUNT });
+```
+
+The [NEAR Intents Agent API](https://docs.agentsonintents.com/integration/agent-api/overview) gives an agent its own wallet on NEAR Intents, governed by a policy its owner signs: allowed actions and assets, destinations, per-transaction and daily limits, a USD budget. The official API is a mainnet-only beta. This rail runs against [Tidepool](https://www.usetidepool.tech/docs/guides/agent-api), a community-run testnet implementation of the same API on NEAR testnet, with NEAR's Intents verifier contract (`verifier.tidepool-sandbox.testnet`). Tidepool is not run by NEAR, checks the policy off-chain in its API, and may be unavailable.
+
+- Pays x402 offers in `usdc` with a `transfer` of Tidepool's test USDC (`nep141:usdc.tidepool-sandbox.testnet`, 6 decimals) inside the verifier, from the agent's wallet to the payee's NEAR account, on the network id `near-intents-testnet`. Dollar limits are exact.
+- The agent holds the partner API key (`naa_…`) and a grant token (`ngt_…`). The owner's key signs the policy and the grant (NEP-413) and stays with the owner: the demo and the MCP server never read `INTENTS_OWNER_KEY`.
+- Spend Guard decides first. The API then checks the owner's policy, which is a second, separate limit. A refusal (`policy_destination_denied`, `policy_transaction_limit_exceeded`, `policy_budget_exceeded`, a revoked grant, a frozen wallet) throws `the NEAR Intents Agent API refused: <code>: <detail>`, recorded as `failed`. A transfer the API accepted but did not settle in time throws `PaymentPending`, recorded as `unconfirmed`.
+- Proof: `{ txid, sender, asset, correlation_id }`, where `txid` is the verifier transaction the API reports and `sender` the agent wallet's account. `checkIntentsPayment(provider, proof, { payTo, amount })` reads that transaction from NEAR RPC and adds up the verifier's own NEP-245 `mt_transfer` events from `sender` to `payTo` in that asset, from receipts that succeeded. The API is not taken on trust. The transaction is signed by Tidepool's relayer (`maker.tidepool-sandbox.testnet`), which RPC needs to find it.
+- Setup: `scripts/intents-agent-setup.js` gets a free API key, makes a throwaway owner (an implicit account, nothing on chain), creates the agent with a policy (transfer test USDC only, to the four honest demo payees, $0.50 per transfer, $1.00 a day) and issues a grant. Fund the agent's wallet with test USDC on [Tidepool's faucet](https://app.usetidepool.tech/faucet), which takes requests from its web page only. `scripts/intents-agent-status.js` shows the wallet, policy and balance. `scripts/intents-leaked-grant.js` plays someone who stole the agent's key and grant. In the MCP server it is `SPEND_GUARD_RAILS=intents`.
 
 ## Arc (USDC)
 

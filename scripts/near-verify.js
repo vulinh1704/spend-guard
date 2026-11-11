@@ -9,6 +9,9 @@
  *   payments  the transaction paid `payTo` at least `amount` yoctoNEAR, read from its receipts with
  *             the check the demo paywall runs (nearPaymentProblem in src/rails/near.js)
  *   refused   the transaction failed, and the guard contract's error contains `reason`
+ *   intents   the Intents verifier's mt_transfer events in the transaction moved at least `amount`
+ *             of `asset` from `sender` to `payTo` (intentsPaymentProblem in src/rails/intents.js);
+ *             `signer` is the relayer that submitted it
  *   balances  the account holds exactly `amount` yoctoNEAR now
  *   guard     the contract's code is the committed wasm (same sha256), its get_policy matches, and
  *             the agent's key on it may only call pay()
@@ -18,6 +21,7 @@
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { baseEncode } from 'near-api-js';
+import { intentsPaymentProblem } from '../src/rails/intents.js';
 import { contractError, formatNear, NEAR_ARCHIVAL_RPC, nearPaymentProblem } from '../src/rails/near.js';
 
 const file = process.argv[2] ?? 'docs/near-testnet-run.md';
@@ -93,6 +97,16 @@ for (const p of run.payments ?? []) {
     const problem = nearPaymentProblem(await txStatus(p.hash, p.signer), { txid: p.hash, sender: p.signer }, { payTo: p.payTo, amount: BigInt(p.amount) });
     if (problem) fail(`${problem} ${explorer(p.hash)}`);
     else pass(`${p.signer} paid ${formatNear(BigInt(p.amount))} NEAR to ${p.payTo} ${explorer(p.hash)}`);
+  } catch (err) {
+    fail(`${p.hash}: ${err.message}`);
+  }
+}
+
+for (const p of run.intents ?? []) {
+  try {
+    const problem = intentsPaymentProblem(await txStatus(p.hash, p.signer), { txid: p.hash, sender: p.sender }, { payTo: p.payTo, amount: BigInt(p.amount) }, { verifier: p.verifier, asset: p.asset });
+    if (problem) fail(`${problem} ${explorer(p.hash)}`);
+    else pass(`the Intents verifier moved ${Number(p.amount) / 1e6} test USDC from ${p.sender.slice(0, 8)}… to ${p.payTo} ${explorer(p.hash)}`);
   } catch (err) {
     fail(`${p.hash}: ${err.message}`);
   }

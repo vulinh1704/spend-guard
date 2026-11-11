@@ -31,6 +31,7 @@ The guard is a library in the agent's process, or the `spend-guard mcp` server n
 | Forged approval | a web page posts "approve" to the dashboard | refused: localhost Host, loopback peer, same Origin, JSON body | `demo/dashboard.js` |
 | Reading the feed | another machine, or a DNS-rebinding page, reads the dashboard's payees, amounts and transactions | refused: it listens on 127.0.0.1 only and answers to localhost names only | `listenLocal` in `demo/dashboard.js` |
 | Stolen agent key (`NearGuardRail`) | someone copies the agent's function-call key and calls the guard contract directly, past the off-chain guard | the contract refuses a payee off its allowlist and anything over its per-payment or daily cap; NEAR itself rejects a plain transfer, `withdraw`, an attached deposit and adding a key | `contracts/near-guard`, function-call key permissions |
+| Leaked Agent API grant (`IntentsAgentRail`) | someone copies the agent's API key and grant and calls the NEAR Intents Agent API directly | the owner's signed policy refuses a destination off its list, the per-transaction limit, actions it doesn't allow (withdraw, swap) and a policy change not signed by the owner | the Agent API's policy (on Tidepool's testnet, checked off-chain by the API) |
 | Made-up or reused proof (paywall side) | a client sends a made-up txid, a proof or signature the paywall already accepted, even twice at once | the paywall refuses it | `checkArcPayment`, `checkNearPayment`, `verifyAuthorization`, `checkGatewayAuthorization`, replay checks in the demo paywalls |
 
 Every decision, including the refusals, is in the ledger with its reasons, so you can audit what happened later.
@@ -57,6 +58,7 @@ These are gaps in the current code, not design limits:
 - **The settlement a paywall reports is taken on trust.** The transaction in its `PAYMENT-RESPONSE` is recorded and linked without an on-chain check. It changes no budget: the payment was counted when it was signed.
 - **Gateway's count of unsettled signatures lives in memory.** After a restart, `GatewayRail` no longer knows what it signed that Gateway has not settled, so it could sign for more than the deposit covers. The guard's budgets still hold.
 - **Smart-wallet payers.** The x402 `exact` checks accept EOA signatures only, and the Circle rail refuses a contract wallet unless it pays by transfer.
+- **The Agent API rail trusts Tidepool for its limits.** On Tidepool's community testnet the owner's policy is checked by Tidepool's API, not by a contract or a TEE, and Tidepool runs the relayer and may be unavailable. The paywall's check doesn't trust it: it reads the verifier's transfer events from NEAR RPC. The official Agent API runs in an attested TEE but is mainnet-only.
 - **The guard contract's owner key is a full-access key.** The owner can redeploy the contract or change its rules, which is the point, but whoever holds that key can too. Keep it away from the agent's machine. The contract counts its daily cap per UTC day, not over a rolling 24 hours, and its caps are in NEAR while the off-chain limits are in dollars.
 
 ## Running an agent with it
