@@ -154,6 +154,94 @@ This script calls the Agent API with the agent's API key and grant alone, past S
 
 So a leaked grant could still pay the allowed payees within the policy's limits: the API reported $0.169923 of the day's $1.00 budget used after these runs (it prices test USDC at about $0.9995). It could not pay `rnaps.`, go past the per-transaction limit, withdraw, swap or change the policy.
 
+## A second guard for the demo video, 11 Nov 2026
+
+The runs above used all of 11 Nov's 0.25 NEAR cap on `guard.spend-guard-bbeb82.testnet`. So the demo video was recorded later that UTC day on a second deployment, `guard2.spend-guard-bbeb82.testnet`, with the same wasm and the same caps. These are the runs the video shows. Each one ran once, between 13:00 and 13:06 UTC, and the four runs on guard2 used exactly that day's 0.25 NEAR cap.
+
+`spend-guard-bbeb82.testnet`, the owner, created `guard2.spend-guard-bbeb82.testnet` with 2.5 testnet NEAR at 12:59 UTC ([`FU3pEDvd…`](https://testnet.nearblocks.io/txns/FU3pEDvdNYcVUEDYsbYgVjNKLLCWaQwRoiYbDAiL2RXP)). One transaction signed by guard2 then deployed the wasm, called `new()` and added the agent's function-call key ([`9S1G3Zx7…`](https://testnet.nearblocks.io/txns/9S1G3Zx7EKTCefUCh8yoDEJu6BMw82cUb3L36t6wUJtB)). These are the steps of `scripts/near-guard-deploy.js`, run from a one-off copy that names the account `guard2.` and keeps the new key out of `.env`.
+
+- Allowlist: `weather.`, `news.`, `quotes.` and `maps.sg-paywall-25135e.testnet`. Not `rnaps.`.
+- Caps: 0.15 NEAR per payment, 0.25 NEAR per UTC day.
+- Agent key `ed25519:45VHQFM3LGQr9LznnVefmMCRtya9UTWWPURbM3KZ9YNx`: may call `pay` on guard2 and nothing else, with 0.25 NEAR of gas allowance.
+
+Each run below had `NEAR_GUARD_ID` and `NEAR_GUARD_AGENT_KEY` set to guard2 and that key. `node scripts/near-verify.js docs/near-testnet-run-guard2.md` checks these runs on chain: guard2's code, policy and agent key, the 16 transfers, the 3 refusals, the Agent API transfer and the balance of `rnaps.`. They have a file of their own because the script checks one guard contract per file.
+
+### `node demo/agent.js --near-guard --dashboard`, 13:01 UTC
+
+The dashboard run. The off-chain guard refused the price spike and the look-alike payee before anything was signed, as in the runs above. `/report` ($0.30, above the $0.25 that needs approval) waited on the dashboard. The video was recorded headless, so the recording script pressed Approve there, and the guard contract paid it.
+
+| Call | Paid to | testnet NEAR | Transaction |
+|---|---|---|---|
+| `/weather` $0.01 | `weather.` | 0.004 | [`BRq8yqWh…`](https://testnet.nearblocks.io/txns/BRq8yqWh3mqqajGQ9cu5ESSx1pcSKMYEeycody3JmsrV) |
+| `/news` $0.02 | `news.` | 0.008 | [`4em94gYi…`](https://testnet.nearblocks.io/txns/4em94gYiKeDhXPqTBcEhk2BqAmyS6Eqgkjw6H3SRPHWw) |
+| `/quotes` $0.01 | `quotes.` | 0.004 | [`5XzNb9SK…`](https://testnet.nearblocks.io/txns/5XzNb9SKuimQwCNMDFsGHBad5DQANiJXn5QZDBJBuxKN) |
+| `/quotes` $0.01 | `quotes.` | 0.004 | [`7x4prfJY…`](https://testnet.nearblocks.io/txns/7x4prfJYUMQPiUVV3wQjeiyqGGQzxhbZDiuP9LTno6kv) |
+| `/quotes` $0.01 | `quotes.` | 0.004 | [`HVcQ1Su3…`](https://testnet.nearblocks.io/txns/HVcQ1Su3mMXCmCqqbwQAVseRFsFNf7BmTBFMd2Wc15zX) |
+| `/quotes` $0.40 | refused before signing: 40x the usual price | | none |
+| `/maps` $0.015 | `maps.` | 0.006 | [`Co79cQib…`](https://testnet.nearblocks.io/txns/Co79cQibnwPwkK9aYLXba6EBMDvrDpvbJ4KTsscd9LH6) |
+| `/maps` $0.015 | `maps.` | 0.006 | [`7gZmrqph…`](https://testnet.nearblocks.io/txns/7gZmrqphyrRq48mNJjD4As8w8J3TwcrwrXcXZoWip3S9) |
+| `/maps` $0.015 | refused before signing: the look-alike `rnaps.sg-paywall-25135e.testnet` | | none |
+| `/weather` $0.01 | `weather.` | 0.004 | [`3yPJAFHu…`](https://testnet.nearblocks.io/txns/3yPJAFHu1nHWyDQ8KGv99nypXLV9r6gHegZwE8yTM1g1) |
+| `/report` $0.30 | `news.`, after Approve | 0.12 | [`kwsmJ9Go…`](https://testnet.nearblocks.io/txns/kwsmJ9GoLSXy54E2zgWbXgmgWTM1ejvaC5oa1HMHQWY) |
+
+Nine transfers, 0.16 testnet NEAR in all. The run ended with `spent today $0.40 of $1.00; 2 payments stopped`.
+
+### `node demo/agent.js --near-guard --injection`, 13:02 UTC
+
+The prompt-injection run, as at 02:04 UTC above: the scripted agent follows the note on `/guide` and asks to pay `/licence`, and the off-chain guard refuses before anything is signed, with the same four reasons:
+
+```
+ledger: denied $1.00 for /licence to rnaps.sg-paywall-25135e.testnet (payee-swap, per-payment, daily-budget, large-payment)
+```
+
+| Call | Paid to | testnet NEAR | Transaction |
+|---|---|---|---|
+| `/weather` | `weather.` | 0.004 | [`8Zge4umX…`](https://testnet.nearblocks.io/txns/8Zge4umXCGvDYJ2xA8DFRfcX57VgvLCieyJJPnmJ7cLt) |
+| `/guide` | free page with the injected note | | none |
+| `/licence` | refused before signing: the look-alike `rnaps.`, $1.00 (0.4 NEAR) | | none |
+| `/news` | `news.` | 0.008 | [`2AVAQdZ1…`](https://testnet.nearblocks.io/txns/2AVAQdZ1xhoj6GsQJ5pxwpfmNxsQZ9VUz9sH5myqiDqZ) |
+
+### `node scripts/mcp-demo.js --near-guard`, 13:03 UTC
+
+The MCP server with `SPEND_GUARD_RAILS=near-guard` and the scripted MCP client, as at 02:04 UTC above. `/report` was declined when nobody answered (`APPROVAL_TIMEOUT=10`). The run ended with `Spent today (UTC): $0.06 of the $1.00 daily budget; $0.94 left.` and `Today: 4 paid, 3 stopped.`
+
+| Call | Paid to | testnet NEAR | Transaction |
+|---|---|---|---|
+| `/weather` | `weather.` | 0.004 | [`3TsyY2aS…`](https://testnet.nearblocks.io/txns/3TsyY2aSe4d5TJWbZ5EaqbPbm4dWLdypTP4ZcWm8wBnF) |
+| `/news` | `news.` | 0.008 | [`AfUxEWW2…`](https://testnet.nearblocks.io/txns/AfUxEWW24WdZ7kmLD3Zq64fSTvM6kaKfeJJS5DEZR5nm) |
+| `/guide`, then `/licence` | refused before signing: the look-alike `rnaps.` | | none |
+| `/maps` | `maps.` | 0.006 | [`6T3FowDP…`](https://testnet.nearblocks.io/txns/6T3FowDPh1QocNns4ExAgor4CeLP4VbVbJ6wgCnZPj1B) |
+| `/maps` | `maps.` | 0.006 | [`G3VUhDRr…`](https://testnet.nearblocks.io/txns/G3VUhDRr8Cd4GcBWrYjzRyRpt43hHD4JVf6DDjrEjeQS) |
+| `/maps` | refused before signing: the look-alike `rnaps.` | | none |
+| `/report` $0.30 | declined: nobody answered in time | | none |
+
+### `node scripts/near-guard-stolen-key.js`, 13:05 UTC
+
+The three runs above paid 0.196 NEAR through guard2 (0.16 + 0.012 + 0.024), so 0.054 NEAR of the day's cap was left, and the script's header said so (`0.054000 NEAR left today`).
+
+| Attempt | Result | Transaction |
+|---|---|---|
+| `pay` 0.01 NEAR to `rnaps.sg-paywall-25135e.testnet` | refused by the contract: `rnaps.sg-paywall-25135e.testnet is not on the allowlist` | [`2yQrAxT7…`](https://testnet.nearblocks.io/txns/2yQrAxT7ze1TdtUTDZoKYMMzL2hYNMfhgZVb6vu8wm5g) |
+| `pay` `weather.` 1 yoctoNEAR over the per-payment cap | refused by the contract: `150000000000000000000001 yoctoNEAR is above the per-payment cap of 150000000000000000000000` | [`HC4rSw2D…`](https://testnet.nearblocks.io/txns/HC4rSw2DP5hL6CVNRQX9QNZ2uZ4s57muYHFReEshunCe) |
+| `pay` 0.054 NEAR to `weather.` | paid: allowed payee, within the caps; that used the rest of the day's cap | [`6KgMzoXP…`](https://testnet.nearblocks.io/txns/6KgMzoXPGw8YZUJsgqwLPXA49iQoLFjsWgkdToA6R8Mj) |
+| `pay` 0.001 NEAR more to `weather.` | refused by the contract: `1000000000000000000000 yoctoNEAR would bring today's spending to 251000000000000000000000, above the daily cap of 250000000000000000000000` | [`R5GdhDWt…`](https://testnet.nearblocks.io/txns/R5GdhDWtnKBLHWJfJM2HKzw1RVes8C6qVWFBLWQzNuN) |
+| a plain transfer of 0.01 NEAR to `rnaps.` | rejected by NEAR, never a transaction: `Access key requires full access` | none |
+| `withdraw` 1 NEAR from the guard | rejected by NEAR: `Access key does not allow method withdraw` | none |
+| `pay` with 1 yoctoNEAR attached | rejected by NEAR: `Deposit is not allowed with function call` | none |
+| add a full-access key to the guard account | rejected by NEAR: `Access key requires full access` | none |
+
+The script's last line was `guard now: spent today 0.250000 of 0.250000 NEAR; rnaps.sg-paywall-25135e.testnet was never paid`.
+
+### `node scripts/intents-leaked-grant.js`, 13:00 UTC
+
+The video's Agent API take, recorded just before the guard2 runs. It uses neither guard contract: the same agent and policy as the 03:45 UTC run above, with the same result. The policy refused $0.01 to `rnaps.` (`policy_destination_denied`), $0.51 to `weather.` (`policy_transaction_limit_exceeded`), withdraw and swap (`policy_action_denied`) and a policy change signed with another key (`owner_signature_invalid`). The $0.01 transfer to `weather.` still went through ([`5xwrt5iv…`](https://testnet.nearblocks.io/txns/5xwrt5ivQdXQFWHWg7RV7a5Ek8fHq2XCfKkhgdhPVnMs)), and the API then reported $0.179919 of the day's $1.00 budget used.
+
+### After the takes
+
+At 13:11 UTC, guard2's `get_policy` showed `spent_today` 250000000000000000000000 and `remaining_today` 0, not paused. guard2 held 2.498500 NEAR after the deploy and 2.241495 NEAR after the takes: 0.25 NEAR paid to the allowed payees, and 0.007005 NEAR of gas for its 19 `pay()` calls. The agent key's gas allowance went from 0.25 to 0.242996 NEAR. `rnaps.sg-paywall-25135e.testnet` still held the 0.05 NEAR it was created with.
+
+The demo's own last line, `guard contract … NEAR (… paid, … gas)`, read the balance before NEAR had refunded all the unused gas. So it showed 0.031990 and 0.029139 NEAR of gas for the dashboard and injection runs. The balances above were read afterwards.
+
 ## What the script checks
 
 ```json near-verify

@@ -264,7 +264,7 @@ Spend Guard is my entry to [NEAR HACKATHON](https://nearhackathon.com), in the t
 - **All of this repository is from the window.** Its first commit, [`90d376b`](https://github.com/vulinh1704/spend-guard/commit/90d376b), is from 30 Oct 2026. There is no earlier code here, so there is no `pre-hackathon` tag, and the diff is the whole repository. Check it with `git log --reverse --format='%h %ad %s' --date=short | head -3`.
 - **Submission tag:** [`near-hackathon-2026`](https://github.com/vulinh1704/spend-guard/tree/near-hackathon-2026) is the state I submitted ([its commits](https://github.com/vulinh1704/spend-guard/commits/near-hackathon-2026)).
 - **AI assistance (rule Q-005).** Parts of the code, tests and docs were written with an AI coding assistant (Claude Code). I reviewed and tested every change.
-- **Demo:** video VIDEO_URL_TODO, demo post on X DEMO_POST_URL_TODO.
+- **Demo:** video VIDEO_URL_TODO, demo post on X DEMO_POST_URL_TODO. The video uses `guard2.spend-guard-bbeb82.testnet`, a second deployment of the same wasm with the same caps ([its runs](docs/near-testnet-run.md#a-second-guard-for-the-demo-video-11-nov-2026)); `node scripts/near-verify.js docs/near-testnet-run-guard2.md` checks them.
 
 ### What NEAR does here
 
