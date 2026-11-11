@@ -5,7 +5,8 @@ A rail moves money on one network. The guard is its only caller: it decides, the
 | Rail | Network id | Asset | How it pays | What the paywall checks | Status |
 |---|---|---|---|---|---|
 | `MockRail` | any you pass | any | nothing moves | payee and amount in the proof | works (tests, offline demo) |
-| `NearRail` | `near-testnet` | `near` | native NEAR transfer from the agent's account | `checkNearPayment`: receiver and deposit of the transaction | works on NEAR testnet |
+| `NearRail` | `near-testnet` | `near` | native NEAR transfer from the agent's account, signed with a full-access key | `checkNearPayment`: the transfers to the payee among the transaction's receipts | works on NEAR testnet |
+| `NearGuardRail` | `near-testnet` | `near` | a `pay(receiver, amount)` call on Spend Guard's contract, which holds the NEAR and makes the transfer; the agent's function-call key may call `pay` and nothing else | `checkNearPayment`, as for `NearRail`: the transfer the contract made is one of the call's receipts | works on NEAR testnet (`guard.spend-guard-bbeb82.testnet`) |
 | `ArcRail`, transfer | `arc-testnet` | `usdc` | ERC-20 `transfer` of USDC from the agent's key | `checkArcPayment`: USDC `Transfer` events in the receipt | works on Arc testnet |
 | `ArcRail`, x402 `exact` | `arc-testnet` | `usdc` | signs an EIP-3009 `transferWithAuthorization` and sends nothing; the paywall settles it and pays the gas | `verifyAuthorization`, then `settleAuthorization` | works on Arc testnet, with the demo paywall as its own settler |
 | `GatewayRail` | `arc-testnet-gateway` | `usdc` | signs a Circle Gateway authorization against USDC deposited in the Gateway Wallet; Circle settles in batches | `checkGatewayAuthorization`, then Circle Gateway's settle (`settleGatewayPayment`) | works on Arc testnet, no Circle account needed |
@@ -36,7 +37,7 @@ Rails are imported from their own entry points, so an agent that pays only in US
 
 ```js
 import { MockRail } from '@vulinh1704/spend-guard/rails/mock';
-import { NearRail, checkNearPayment } from '@vulinh1704/spend-guard/rails/near';
+import { NearRail, NearGuardRail, checkNearPayment } from '@vulinh1704/spend-guard/rails/near';
 import { ArcRail, checkArcPayment, arcTestnet, ARC_USDC, ARC_USDC_DOMAIN } from '@vulinh1704/spend-guard/rails/arc';
 import { signAuthorization, verifyAuthorization, settleAuthorization } from '@vulinh1704/spend-guard/rails/eip3009';
 import { GatewayRail, gatewayOffer, checkGatewayAuthorization, settleGatewayPayment } from '@vulinh1704/spend-guard/rails/gateway';
@@ -56,9 +57,27 @@ const rail = new NearRail({ accountId: process.env.NEAR_ACCOUNT_ID, privateKey: 
 - Pays native NEAR (`asset: 'near'`, 24 decimals) with a transfer from `accountId`, and refuses any other asset.
 - Keeps the id of the transaction it signed. If sending fails after that (an RPC timeout, say), it throws `PaymentUnconfirmed` with that id, and the guard records the payment as `unconfirmed`, counted against the budget. A failure on chain is a plain `failed`.
 - Proof: `{ txid, sender }`.
-- `checkNearPayment(provider, proof, { payTo, amount })` is the paywall's side. It reads the transaction from the chain and checks that it succeeded, went to `payTo` and deposited at least `amount`.
+- `checkNearPayment(provider, proof, { payTo, amount })` is the paywall's side. It reads the transaction with all its receipts from the chain (`EXPERIMENTAL_tx_status`), checks that `sender` signed it, and adds up the transfers to `payTo` that succeeded, which must come to at least `amount`. Gas refunds don't count.
 - RPC: `https://test.rpc.fastnear.com` for `near-testnet`. Pass `provider` to use another one.
 - Setup: `scripts/near-testnet-account.js` (agent account from the testnet faucet) and `scripts/near-demo-payees.js`.
+- The agent's account signs with a full-access key, because a function-call key can't send a transfer. Code that holds that key can pay without the guard. `NearGuardRail` closes that.
+
+## NEAR guard contract
+
+```js
+const rail = new NearGuardRail({ guardId: process.env.NEAR_GUARD_ID, privateKey: process.env.NEAR_GUARD_AGENT_KEY });
+```
+
+The agent's NEAR sits in a small contract, `contracts/near-guard` (Rust, near-sdk 5), on its own account. The agent holds only a function-call key on that account, which may call `pay` on it and nothing else. The owner's key stays with the owner.
+
+- `pay(receiver, amount)` pays only accounts on the owner's allowlist, at most `per_payment_cap` per payment and at most `daily_cap` per UTC day. Otherwise the call fails with the reason, such as `rnaps.sg-paywall-25135e.testnet is not on the allowlist`, and no NEAR moves. The transfer's callback, `on_pay_done`, gives the day's budget back when the transfer itself failed.
+- `allow`, `disallow`, `set_caps`, `set_paused` and `withdraw` are for the owner only, and each needs exactly 1 yoctoNEAR attached. A function-call key can't attach a deposit, so the agent's key can't call them even if the method list allowed it.
+- `get_policy` is a view call: owner, allowlist, caps, what is spent and left today, paused, and the balance available to pay.
+- The rail sends `pay` with no deposit and `GUARD_PAY_GAS` (30 Tgas). A refusal throws `the guard contract refused: <reason>`, recorded as `failed`. A transfer that fails inside `pay` (a payee account that doesn't exist, say) throws too, since the contract got the NEAR back. As with `NearRail`, an error after signing throws `PaymentUnconfirmed`.
+- Proof: `{ txid, sender }`, where `sender` is the guard account, which signed the call. The paywall's `checkNearPayment` finds the contract's transfer among the call's receipts. It doesn't trust the call's own status, because `pay` succeeds and returns `false` when its transfer fails.
+- The off-chain guard still decides first: price spikes, unknown services and a person's Approve. The contract is the hard limit under it, and it holds against someone who steals the agent's key and goes straight to the chain.
+- Limits: the key's gas allowance is charged to the guard's balance, so a stolen key can also spend that much on gas. The owner's full-access key on the guard account can redeploy the contract. The caps are in NEAR, and the off-chain guard's limits are in dollars.
+- Setup: `scripts/near-guard-deploy.js` creates `guard.<your account>`, deploys the committed wasm (`contracts/near-guard/res`, with its sha256), calls `new()` with the allowlist and caps and adds the agent's key. `scripts/near-guard-stolen-key.js` plays someone who stole that key. In the MCP server it is `SPEND_GUARD_RAILS=near-guard`.
 
 ## Arc (USDC)
 

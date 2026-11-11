@@ -2,6 +2,26 @@
 
 All notable changes to this project are listed here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow [Semantic Versioning](https://semver.org/).
 
+## Unreleased
+
+Built for NEAR HACKATHON. Not published to npm yet.
+
+### Added
+
+- NEAR guard contract (`contracts/near-guard`, Rust, near-sdk 5). It holds the agent's NEAR and its `pay(receiver, amount)` pays only accounts on the owner's allowlist, within a per-payment cap and a daily cap per UTC day. Changing the rules, pausing and withdrawing are for the owner only and need 1 yoctoNEAR attached, which a function-call key can't attach. 22 unit tests, and the built wasm with its sha256, which CI checks.
+- `NearGuardRail` (`rails/near`): pays through that contract with a function-call key that may only call `pay`, and reads the contract's refusal back as an error.
+- `SPEND_GUARD_RAILS=near-guard` in the MCP server, with `NEAR_GUARD_ID` and `NEAR_GUARD_AGENT_KEY`. `scripts/mcp-demo.js` takes `--near` and `--near-guard`.
+- Prompt-injection demo: the demo paywall's free page `/guide` tells AI agents to pay a 0.4 NEAR ($1.00) "licence fee" to the look-alike account at `/licence`. `node demo/agent.js --injection` (`npm run demo:injection`) follows it and shows the guard's refusal and the ledger entry. The MCP demo follows it too. CI runs it offline.
+- `scripts/near-guard-deploy.js` deploys the contract on testnet and adds the agent's key. `scripts/near-guard-stolen-key.js` signs with that key alone and shows what the contract and NEAR refuse.
+- `scripts/near-verify.js` checks the runs recorded in [docs/near-testnet-run.md](docs/near-testnet-run.md) with no key: each transaction from a public archival RPC, the contract's refusals and code hash, its policy and the agent key's permission.
+- `demo/agent.js --near` and `--near-guard` print the account's balance before and after, split into payments and gas.
+- `scripts/near-testnet-account.js` prints the faucet route from NEAR's FAQ when the testnet helper fails, and `scripts/near-demo-payees.js --no-faucet` makes the paywall a sub-account of the agent account.
+
+### Changed
+
+- `checkNearPayment` reads the transaction with all its receipts (`EXPERIMENTAL_tx_status`) and adds up the successful transfers to the payee, so it covers a transfer made inside the guard contract. Gas refunds don't count, and the transaction must be signed by the proof's sender.
+- `spend-guard mcp` refuses two rails on one network (such as `near` and `near-guard`) at start, instead of keeping only the last one.
+
 ## 0.2.1 - 2026-11-01
 
 Documentation only. No code changes.
