@@ -34,7 +34,7 @@
         },
         {
           "name": "SPEND_GUARD_RAILS",
-          "description": "How to pay: mock (pays nothing), near, near-guard, arc, gateway, or a comma list with one rail per network. arc and gateway need ARC_PRIVATE_KEY, near needs NEAR_ACCOUNT_ID and NEAR_PRIVATE_KEY, near-guard needs NEAR_GUARD_ID and NEAR_GUARD_AGENT_KEY.",
+          "description": "How to pay: mock (pays nothing), near, near-guard, intents, arc, gateway, or a comma list with one rail per network. arc and gateway need ARC_PRIVATE_KEY, near needs NEAR_ACCOUNT_ID and NEAR_PRIVATE_KEY, near-guard needs NEAR_GUARD_ID and NEAR_GUARD_AGENT_KEY, intents needs the INTENTS_* variables.",
           "default": "mock",
           "isRequired": false
         },
@@ -90,6 +90,33 @@
           "description": "The agent's function-call key on the guard contract's account, which may only call pay(). Testnet keys only.",
           "isRequired": false,
           "isSecret": true
+        },
+        {
+          "name": "INTENTS_API_URL",
+          "description": "Base URL of the NEAR Intents Agent API for the intents rail. Default https://www.usetidepool.tech (Tidepool's community testnet).",
+          "isRequired": false
+        },
+        {
+          "name": "INTENTS_API_KEY",
+          "description": "The Agent API partner key (naa_...) for the intents rail. Testnet only.",
+          "isRequired": false,
+          "isSecret": true
+        },
+        {
+          "name": "INTENTS_AGENT_ID",
+          "description": "The Agent API agent the intents rail pays from.",
+          "isRequired": false
+        },
+        {
+          "name": "INTENTS_GRANT_TOKEN",
+          "description": "The agent's grant token (ngt_...), issued by the owner's signed grant_issue intent.",
+          "isRequired": false,
+          "isSecret": true
+        },
+        {
+          "name": "INTENTS_AGENT_ACCOUNT",
+          "description": "The agent wallet's NEAR account, which the paywall checks as the sender of each transfer.",
+          "isRequired": false
         }
       ]
     }

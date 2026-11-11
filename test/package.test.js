@@ -58,7 +58,7 @@ describe('npm package', () => {
   });
 
   test('ships every module the command and the entry points load, and nothing from test/ or demo paywalls', () => {
-    const entries = [pkg.bin['spend-guard'], pkg.exports['.'], ...['arc', 'circle-wallet', 'eip3009', 'gateway', 'mock', 'near'].map((r) => pkg.exports['./rails/*'].replace('*', r))];
+    const entries = [pkg.bin['spend-guard'], pkg.exports['.'], ...['arc', 'circle-wallet', 'eip3009', 'gateway', 'intents', 'mock', 'near'].map((r) => pkg.exports['./rails/*'].replace('*', r))];
     const loaded = new Set(entries.flatMap((e) => [...localImports(path.posix.normalize(e))]));
     assert.ok(loaded.has('demo/dashboard.js'), 'the command serves the dashboard');
     for (const file of loaded) assert.ok(ships(file), `${file} is loaded but not in "files"`);
@@ -87,11 +87,11 @@ describe('MCP registry entry (server.json)', () => {
 
   test('lists every variable the server reads, none required, keys marked secret', () => {
     const code = ['src/mcp.js', 'bin/spend-guard.js'].map((f) => readFileSync(path.join(root, f), 'utf8')).join('\n');
-    const read = new Set(code.match(/\b(?:SPEND_GUARD_[A-Z_]+|ARC_PRIVATE_KEY|NEAR_ACCOUNT_ID|NEAR_PRIVATE_KEY|NEAR_GUARD_ID|NEAR_GUARD_AGENT_KEY)\b/g));
+    const read = new Set(code.match(/\b(?:SPEND_GUARD_[A-Z_]+|ARC_PRIVATE_KEY|NEAR_ACCOUNT_ID|NEAR_PRIVATE_KEY|NEAR_GUARD_ID|NEAR_GUARD_AGENT_KEY|INTENTS_[A-Z_]+)\b/g));
     const listed = npm.environmentVariables;
     assert.deepEqual(listed.map((v) => v.name).sort(), [...read].sort());
     // With no variables at all the server runs on the mock rail, so a registry client can start it as is.
     assert.ok(listed.every((v) => v.isRequired === false), 'the mock rail needs nothing');
-    assert.deepEqual(listed.filter((v) => v.isSecret).map((v) => v.name), ['ARC_PRIVATE_KEY', 'NEAR_PRIVATE_KEY', 'NEAR_GUARD_AGENT_KEY']);
+    assert.deepEqual(listed.filter((v) => v.isSecret).map((v) => v.name), ['ARC_PRIVATE_KEY', 'NEAR_PRIVATE_KEY', 'NEAR_GUARD_AGENT_KEY', 'INTENTS_API_KEY', 'INTENTS_GRANT_TOKEN']);
   });
 });

@@ -15,8 +15,9 @@ wait for you on the dashboard (http://127.0.0.1:4400) with Approve and Deny butt
 Environment:
   SPEND_GUARD_POLICY            policy JSON file (default: no known services, so every payment asks you)
   SPEND_GUARD_RAILS             mock (default, pays nothing), near, near-guard (through the NEAR guard
-                                contract), arc, gateway (Circle Gateway nanopayments from a deposit),
-                                or a comma list with one rail per network
+                                contract), intents (NEAR Intents Agent API, Tidepool testnet), arc,
+                                gateway (Circle Gateway nanopayments from a deposit), or a comma list
+                                with one rail per network
   SPEND_GUARD_MOCK_NETWORK      network the mock rail pretends to pay on (default near-testnet)
   SPEND_GUARD_LEDGER            decisions file, read back on start; servers on one file share one budget
                                 (default ~/.spend-guard/ledger.jsonl; off keeps it in memory)
@@ -29,6 +30,8 @@ Environment:
                                 testnet keys only
   NEAR_GUARD_ID, NEAR_GUARD_AGENT_KEY   for near-guard: the guard contract's account, and the agent's
                                 function-call key on it, which may only call pay()
+  INTENTS_API_KEY, INTENTS_AGENT_ID, INTENTS_GRANT_TOKEN, INTENTS_AGENT_ACCOUNT, INTENTS_API_URL
+                                for intents: the agent's Agent API key, id, grant and wallet account
 
 For example, in Claude Code:
   claude mcp add spend-guard --env SPEND_GUARD_POLICY=/abs/path/policy.json -- node /abs/path/spend-guard/bin/spend-guard.js mcp
@@ -37,6 +40,7 @@ For example, in Claude Code:
 const EXPLORERS = {
   'arc-testnet': (tx) => `https://testnet.arcscan.app/tx/${tx}`,
   'near-testnet': (tx) => `https://testnet.nearblocks.io/txns/${tx}`,
+  'near-intents-testnet': (tx) => `https://testnet.nearblocks.io/txns/${tx}`,
 };
 
 async function main([cmd, ...rest]) {

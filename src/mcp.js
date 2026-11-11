@@ -327,9 +327,9 @@ async function readBody(res, type) {
  * The guard the server runs, from the environment:
  *   SPEND_GUARD_POLICY        policy JSON file (the Policy in policy.js). Default: no known services,
  *                             so every payment waits for the user.
- *   SPEND_GUARD_RAILS         comma list of mock, near, near-guard, arc, gateway. Default mock (pays
- *                             nothing). One rail per network: near and near-guard both pay on
- *                             near-testnet, so pick one.
+ *   SPEND_GUARD_RAILS         comma list of mock, near, near-guard, intents, arc, gateway. Default
+ *                             mock (pays nothing). One rail per network: near and near-guard both
+ *                             pay on near-testnet, so pick one.
  *   SPEND_GUARD_MOCK_NETWORK  the network the mock rail pretends to pay on. Default near-testnet,
  *                             as the demo paywall (node demo/paid-api.js) asks.
  *   SPEND_GUARD_LEDGER        JSON-lines file of every decision, read back on start so the daily
@@ -340,7 +340,10 @@ async function readBody(res, type) {
  *                             contract's account and the agent's function-call key on it, see
  *                             scripts/near-guard-deploy.js) for near-guard; ARC_PRIVATE_KEY for arc
  *                             and gateway (testnet keys only; gateway pays from a Gateway deposit,
- *                             see scripts/gateway-deposit.js).
+ *                             see scripts/gateway-deposit.js). INTENTS_API_KEY, INTENTS_AGENT_ID,
+ *                             INTENTS_GRANT_TOKEN and INTENTS_AGENT_ACCOUNT (INTENTS_API_URL
+ *                             optional) for intents: the NEAR Intents Agent API on Tidepool's
+ *                             community testnet, see scripts/intents-agent-setup.js.
  *
  * @param {NodeJS.ProcessEnv} [env]
  * @param {{approve?: ConstructorParameters<typeof Guard>[0]['approve']}} [options]
@@ -359,6 +362,10 @@ export async function guardFromEnv(env = process.env, { approve } = {}) {
       // The agent's NEAR sits in the guard contract, and this key may only call its pay().
       const { NearGuardRail } = await import('./rails/near.js');
       rail = new NearGuardRail({ guardId: required(env, 'NEAR_GUARD_ID'), privateKey: required(env, 'NEAR_GUARD_AGENT_KEY'), network: 'near-testnet' });
+    } else if (name === 'intents') {
+      // The agent's API key and grant; the owner's signed policy is checked by the API behind the guard.
+      const { IntentsAgentRail } = await import('./rails/intents.js');
+      rail = new IntentsAgentRail({ baseUrl: env.INTENTS_API_URL || undefined, apiKey: required(env, 'INTENTS_API_KEY'), agentId: required(env, 'INTENTS_AGENT_ID'), grantToken: required(env, 'INTENTS_GRANT_TOKEN'), agentAccount: required(env, 'INTENTS_AGENT_ACCOUNT') });
     } else if (name === 'arc') {
       const { ArcRail } = await import('./rails/arc.js');
       rail = new ArcRail({ privateKey: required(env, 'ARC_PRIVATE_KEY') });
@@ -366,7 +373,7 @@ export async function guardFromEnv(env = process.env, { approve } = {}) {
       const { GatewayRail } = await import('./rails/gateway.js');
       rail = new GatewayRail({ privateKey: required(env, 'ARC_PRIVATE_KEY') });
     } else {
-      throw new Error(`unknown rail "${name}" in SPEND_GUARD_RAILS (use mock, near, near-guard, arc or gateway)`);
+      throw new Error(`unknown rail "${name}" in SPEND_GUARD_RAILS (use mock, near, near-guard, intents, arc or gateway)`);
     }
     // The guard keeps one rail per network, so a second one would silently replace the first.
     const taken = rails.findIndex((r) => r.network === rail.network);

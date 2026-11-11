@@ -10,6 +10,8 @@
  *   node scripts/mcp-demo.js --near-guard  # real NEAR on NEAR testnet through the guard contract: the server
  *                                          # holds only the agent's function-call key for pay()
  *                                          # (NEAR_GUARD_ID, NEAR_GUARD_AGENT_KEY in .env, see near-guard-deploy.js)
+ *   node scripts/mcp-demo.js --intents     # test USDC through the NEAR Intents Agent API on Tidepool's community
+ *                                          # testnet (INTENTS_* in .env, see intents-agent-setup.js)
  *   node scripts/mcp-demo.js --arc         # real USDC on Arc testnet (ARC_* in .env, see arc-testnet-wallet.js)
  *
  * DASHBOARD_PORT (default 4400) and APPROVAL_TIMEOUT (seconds, default 120) go to the server.
@@ -24,12 +26,13 @@ import { JsonRpcProvider } from 'near-api-js';
 import { createPublicClient, http } from 'viem';
 import { createPaidApi, PAYEES } from '../demo/paid-api.js';
 import { arcTestnet, checkArcPayment } from '../src/rails/arc.js';
+import { checkIntentsPayment } from '../src/rails/intents.js';
 import { checkNearPayment, NEAR_RPC } from '../src/rails/near.js';
 
 const PLAN = ['weather', 'news', 'guide', 'maps', 'maps', 'maps', 'report'];
 const dim = (s) => (process.stdout.isTTY ? `\x1b[2m${s}\x1b[0m` : s);
 
-const mode = ['near-guard', 'near', 'arc'].find((m) => process.argv.includes(`--${m}`)) ?? 'mock';
+const mode = ['near-guard', 'near', 'intents', 'arc'].find((m) => process.argv.includes(`--${m}`)) ?? 'mock';
 if (mode !== 'mock' && existsSync('.env')) process.loadEnvFile('.env');
 const env = process.env;
 
@@ -60,6 +63,17 @@ function setUp() {
       payees, network: 'near-testnet', rails: mode, keys,
       paywall: createPaidApi({ network: 'near-testnet', asset: 'near', payees, verify: (p, e) => checkNearPayment(provider, p, e) }),
       // NEAR transaction hashes are base58.
+      txLink: (line) => link(line, /transaction ([1-9A-HJ-NP-Za-km-z]{43,44})\b/, 'https://testnet.nearblocks.io/txns/'),
+    };
+  }
+  if (mode === 'intents') {
+    const payees = { weather: env.PAYEE_WEATHER, news: env.PAYEE_NEWS, quotes: env.PAYEE_QUOTES, maps: env.PAYEE_MAPS, thief: env.PAYEE_THIEF };
+    const provider = new JsonRpcProvider({ url: NEAR_RPC['near-testnet'] });
+    // The agent's side only: never INTENTS_OWNER_KEY.
+    const keys = Object.fromEntries(['INTENTS_API_URL', 'INTENTS_API_KEY', 'INTENTS_AGENT_ID', 'INTENTS_GRANT_TOKEN', 'INTENTS_AGENT_ACCOUNT'].filter((k) => env[k]).map((k) => [k, env[k]]));
+    return {
+      payees, network: 'near-intents-testnet', rails: 'intents', keys,
+      paywall: createPaidApi({ network: 'near-intents-testnet', asset: 'usdc', payees, verify: (p, e) => checkIntentsPayment(provider, p, e) }),
       txLink: (line) => link(line, /transaction ([1-9A-HJ-NP-Za-km-z]{43,44})\b/, 'https://testnet.nearblocks.io/txns/'),
     };
   }

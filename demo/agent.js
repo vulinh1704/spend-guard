@@ -7,6 +7,10 @@
  *   node demo/agent.js --near-guard    # NEAR testnet through the guard contract: the agent holds only
  *                                      # a function-call key for pay() (needs NEAR_GUARD_ID and
  *                                      # NEAR_GUARD_AGENT_KEY in .env, see scripts/near-guard-deploy.js)
+ *   node demo/agent.js --intents       # test USDC through the NEAR Intents Agent API on Tidepool's
+ *                                      # community testnet: the agent holds an API key and a grant, and
+ *                                      # the owner's signed policy is a second limit behind the guard
+ *                                      # (needs INTENTS_* in .env, see scripts/intents-agent-setup.js)
  *   node demo/agent.js --arc           # real USDC transfers on Circle's Arc testnet (needs .env)
  *   node demo/agent.js --arc-x402      # x402 v2 'exact' on Arc: the agent only signs EIP-3009
  *                                      # authorizations; the paywall settles them and pays the gas
@@ -25,6 +29,7 @@
  */
 import { existsSync } from 'node:fs';
 import { setTimeout as sleep } from 'node:timers/promises';
+import { JsonRpcProvider } from 'near-api-js';
 import { createWalletClient, erc20Abi, http } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
 import { createDashboard, listenLocal } from './dashboard.js';
@@ -36,7 +41,8 @@ import { formatUsd } from '../src/money.js';
 import { ARC_USDC, ArcRail, arcTestnet, checkArcPayment } from '../src/rails/arc.js';
 import { GatewayRail, gatewayTransferUrl } from '../src/rails/gateway.js';
 import { MockRail } from '../src/rails/mock.js';
-import { checkNearPayment, formatNear, NearGuardRail, NearRail } from '../src/rails/near.js';
+import { checkIntentsPayment, IntentsAgentRail } from '../src/rails/intents.js';
+import { checkNearPayment, formatNear, NEAR_RPC, NearGuardRail, NearRail } from '../src/rails/near.js';
 import { payingFetch } from '../src/x402.js';
 
 const PLAN = ['weather', 'news', 'quotes', 'quotes', 'quotes', 'quotes', 'maps', 'maps', 'maps', 'weather', 'report'];
@@ -68,6 +74,23 @@ function setUp(mode) {
       // What left the account beyond the payments is gas (with the guard contract, the agent key's
       // gas is charged to the guard's account too).
       showBalance: (before, after, paid) => `${who} ${formatNear(before)} → ${formatNear(after)} NEAR (${formatNear(after - before)}: ${formatNear(paid)} paid, ${formatNear(before - after - paid)} gas)`,
+    };
+  }
+  if (mode === 'intents') {
+    // The agent gets the API key and its grant, never the owner's key.
+    delete env.INTENTS_OWNER_KEY;
+    const rail = new IntentsAgentRail({ baseUrl: env.INTENTS_API_URL, apiKey: env.INTENTS_API_KEY, agentId: env.INTENTS_AGENT_ID, grantToken: env.INTENTS_GRANT_TOKEN, agentAccount: env.INTENTS_AGENT_ACCOUNT });
+    const payees = { weather: env.PAYEE_WEATHER, news: env.PAYEE_NEWS, quotes: env.PAYEE_QUOTES, maps: env.PAYEE_MAPS, thief: env.PAYEE_THIEF };
+    // The paywall reads the verifier's transfer events from NEAR testnet itself, not from the Agent API.
+    const provider = new JsonRpcProvider({ url: NEAR_RPC['near-testnet'] });
+    return {
+      rail, payees,
+      label: `${rail.agentId} (wallet ${rail.agentAccount.slice(0, 8)}…) · NEAR Intents Agent API on Tidepool's community testnet`,
+      paywall: createPaidApi({ network: 'near-intents-testnet', asset: 'usdc', payees, verify: (p, e) => checkIntentsPayment(provider, p, e) }),
+      explorer: (txid) => `https://testnet.nearblocks.io/txns/${txid}`,
+      balance: () => rail.balance(),
+      // Test USDC has 6 decimals, so atomic units are micro-dollars; the relayer pays the gas.
+      showBalance: (before, after) => `agent wallet ${formatUsd(before)} → ${formatUsd(after)} test USDC (${formatUsd(after - before)})`,
     };
   }
   if (mode === 'arc' || mode === 'arc-x402') {
@@ -103,7 +126,7 @@ function setUp(mode) {
   return { rail: new MockRail('near-testnet'), payees: PAYEES, label: 'mock payments · offline', paywall: createPaidApi(), explorer: undefined };
 }
 
-const mode = ['near-guard', 'near', 'arc-x402', 'arc', 'gateway'].find((m) => process.argv.includes(`--${m}`)) ?? 'mock';
+const mode = ['near-guard', 'near', 'intents', 'arc-x402', 'arc', 'gateway'].find((m) => process.argv.includes(`--${m}`)) ?? 'mock';
 const injection = process.argv.includes('--injection');
 // The Gateway demo seller has the paid endpoints only, not the free page that carries the injection.
 if (injection && mode === 'gateway') throw new Error('--injection runs on the mock, NEAR and Arc paywalls, not with --gateway');
@@ -177,7 +200,14 @@ while (queue.length) {
       queue.unshift(order);
     }
   } catch (err) {
-    if (!(err instanceof GuardRefused)) throw err;
+    const last = guard.ledger.entries.at(-1);
+    if (!(err instanceof GuardRefused)) {
+      // The guard said yes but the rail could not pay (the Agent API's own policy refused it, say):
+      // the ledger records it as failed, and nothing was paid.
+      if (last?.status !== 'failed' || !last.intent.resource.endsWith(`/${name}`)) throw err;
+      console.log(`${red('✗ failed')} /${name.padEnd(8)} ${err.message}`);
+      continue;
+    }
     console.log(`${red(`✗ ${err.status}`)} /${name.padEnd(8)} ${err.reasons.map((r) => r.message).join('; ')}`);
   }
 }
